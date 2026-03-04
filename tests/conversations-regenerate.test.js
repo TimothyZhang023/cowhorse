@@ -7,10 +7,15 @@ import {
 } from "../server/models/database.js";
 
 describe("conversation helpers", () => {
-  it("deletes only the latest assistant message", () => {
-    const user = createUser(`user_${Date.now()}`, "password123");
-    const conv = createConversation(user.uid, "test conv");
+  let user;
+  let conv;
 
+  beforeEach(() => {
+    user = createUser(`user_${Date.now()}_${Math.random()}`, "password123");
+    conv = createConversation(user.uid, "test conv");
+  });
+
+  it("deletes only the latest assistant message", () => {
     addMessage(conv.id, user.uid, "user", "u1");
     addMessage(conv.id, user.uid, "assistant", "a1");
     addMessage(conv.id, user.uid, "user", "u2");
@@ -24,9 +29,6 @@ describe("conversation helpers", () => {
   });
 
   it("returns false when no assistant message exists", () => {
-    const user = createUser(`user_${Date.now()}_2`, "password123");
-    const conv = createConversation(user.uid, "test conv 2");
-
     addMessage(conv.id, user.uid, "user", "hello");
     const deleted = deleteLastAssistantMessage(conv.id, user.uid);
 

@@ -1,8 +1,8 @@
 import { login, register } from "@/services/api";
-import { LockOutlined, UserOutlined } from "@ant-design/icons";
+import { LockOutlined, UserOutlined, BulbOutlined } from "@ant-design/icons";
 import { LoginForm, ProFormText } from "@ant-design/pro-components";
 import { useModel } from "@umijs/max";
-import { message, Tabs } from "antd";
+import { message, Tabs, ConfigProvider } from "antd";
 import { useState } from "react";
 
 export default () => {
@@ -43,90 +43,138 @@ export default () => {
   };
 
   return (
-    <div
-      style={{
-        backgroundColor: "#f0f4f9",
-        height: "100vh",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: "#4f46e5",
+          borderRadius: 12,
+          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+        },
       }}
     >
-      <LoginForm
-        logo={null}
-        title="Gemini Chat"
-        subTitle="A Gemini-style AI chat application"
-        submitter={{
-          searchConfig: {
-            submitText: type === "login" ? "登录" : "注册",
-          },
-        }}
-        onFinish={async (values) => {
-          await handleSubmit(values as any);
+      <div
+        style={{
+          background: "linear-gradient(135deg, #e0e7ff 0%, #ede9fe 50%, #f3e8ff 100%)",
+          minHeight: "100vh",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          position: "relative",
+          overflow: "hidden",
         }}
       >
-        <Tabs
-          activeKey={type}
-          onChange={setType}
-          centered
-          items={[
-            {
-              key: "login",
-              label: "账号登录",
-            },
-            {
-              key: "register",
-              label: "账号注册",
-            },
-          ]}
-        />
+        {/* Soft floating background blobs */}
+        <div style={{ position: "absolute", top: "-10%", left: "-10%", width: "40vw", height: "40vw", background: "#c7d2fe", borderRadius: "50%", filter: "blur(80px)", opacity: 0.6 }} />
+        <div style={{ position: "absolute", bottom: "-10%", right: "-10%", width: "40vw", height: "40vw", background: "#e9d5ff", borderRadius: "50%", filter: "blur(80px)", opacity: 0.6 }} />
 
-        <ProFormText
-          name="username"
-          fieldProps={{
-            size: "large",
-            prefix: <UserOutlined className={"prefixIcon"} />,
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            maxWidth: 420,
+            margin: "0 20px",
+            background: "rgba(255, 255, 255, 0.7)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            borderRadius: "24px",
+            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0,0,0,0.1)",
+            padding: "40px 32px",
+            border: "1px solid rgba(255,255,255,0.8)",
           }}
-          placeholder={"用户名"}
-          rules={[
-            {
-              required: true,
-              message: "请输入用户名!",
-            },
-          ]}
-        />
-        <ProFormText.Password
-          name="password"
-          fieldProps={{
-            size: "large",
-            prefix: <LockOutlined className={"prefixIcon"} />,
-          }}
-          placeholder={"密码"}
-          rules={[
-            {
-              required: true,
-              message: "请输入密码！",
-            },
-          ]}
-        />
+        >
+          <div style={{ textAlign: "center", marginBottom: 32 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 56, height: 56, borderRadius: 16, background: "linear-gradient(135deg, #4f46e5, #8b5cf6)", color: "white", fontSize: 28, marginBottom: 16, boxShadow: "0 10px 15px -3px rgba(79, 70, 229, 0.3)" }}>
+              <BulbOutlined />
+            </div>
+            <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: "#1e1b4b", letterSpacing: "-0.5px" }}>Gemini Chat</h1>
+            <p style={{ marginTop: 8, color: "#6b7280", fontSize: 14 }}>A premium AI conversation experience</p>
+          </div>
 
-        {type === "register" && (
-          <ProFormText.Password
-            name="confirmPassword"
-            fieldProps={{
-              size: "large",
-              prefix: <LockOutlined className={"prefixIcon"} />,
-            }}
-            placeholder={"确认密码"}
-            rules={[
-              {
-                required: true,
-                message: "请确认密码！",
+          <LoginForm
+            logo={null}
+            title={null}
+            subTitle={null}
+            submitter={{
+              searchConfig: {
+                submitText: type === "login" ? "进入系统" : "立即注册",
               },
-            ]}
-          />
-        )}
-      </LoginForm>
-    </div>
+              submitButtonProps: {
+                size: "large",
+                style: { width: "100%", borderRadius: 12, height: 48, fontSize: 16, fontWeight: 600, marginTop: 8 },
+              },
+            }}
+            onFinish={async (values) => {
+              await handleSubmit(values as any);
+            }}
+          >
+            <Tabs
+              activeKey={type}
+              onChange={setType}
+              centered
+              style={{ marginBottom: 24 }}
+              items={[
+                {
+                  key: "login",
+                  label: <span style={{ fontSize: 16, fontWeight: 500 }}>登录</span>,
+                },
+                {
+                  key: "register",
+                  label: <span style={{ fontSize: 16, fontWeight: 500 }}>注册</span>,
+                },
+              ]}
+            />
+
+            <ProFormText
+              name="username"
+              fieldProps={{
+                size: "large",
+                style: { borderRadius: 12 },
+                prefix: <UserOutlined style={{ color: "rgba(0,0,0,0.25)" }} />,
+              }}
+              placeholder={"请输入用户名"}
+              rules={[
+                {
+                  required: true,
+                  message: "请输入用户名!",
+                },
+              ]}
+            />
+            <ProFormText.Password
+              name="password"
+              fieldProps={{
+                size: "large",
+                style: { borderRadius: 12 },
+                prefix: <LockOutlined style={{ color: "rgba(0,0,0,0.25)" }} />,
+              }}
+              placeholder={"请输入密码"}
+              rules={[
+                {
+                  required: true,
+                  message: "请输入密码！",
+                },
+              ]}
+            />
+
+            {type === "register" && (
+              <ProFormText.Password
+                name="confirmPassword"
+                fieldProps={{
+                  size: "large",
+                  style: { borderRadius: 12 },
+                  prefix: <LockOutlined style={{ color: "rgba(0,0,0,0.25)" }} />,
+                }}
+                placeholder={"请再次输入密码"}
+                rules={[
+                  {
+                    required: true,
+                    message: "请确认你的密码！",
+                  },
+                ]}
+              />
+            )}
+          </LoginForm>
+        </div>
+      </div>
+    </ConfigProvider>
   );
 };
