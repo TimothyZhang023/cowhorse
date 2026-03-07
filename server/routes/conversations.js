@@ -322,6 +322,17 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
     source: opts.source || "chat",
     model,
   });
+  const persistAssistantFailure = (aiMsgId, fallbackText) => {
+    if (!aiMsgId) return;
+    try {
+      updateMessage(aiMsgId, uid, fallbackText);
+    } catch (error) {
+      requestLog.warn(
+        { err: error, aiMsgId },
+        "Failed to persist assistant fallback content"
+      );
+    }
+  };
 
   requestLog.info(
     {
@@ -333,6 +344,8 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
   );
 
   if (!endpoints.length) {
+    const fallbackText = "⚠️ 未配置可用 API Endpoint，请先到设置里配置。";
+    persistAssistantFailure(opts.aiMsgId, fallbackText);
     requestLog.warn("No API endpoints configured");
     res.write(
       `data: ${JSON.stringify({ error: "请先在设置中配置 API Endpoint" })}\n\n`
@@ -517,13 +530,16 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
 
           // CASE 1: No tools
           if (finalToolCalls.length === 0) {
-            if (!fullTextContent.trim() && lastFinishReason) {
+            if (!fullTextContent.trim()) {
               const requestedMaxTokens =
                 opts?.generationConfig?.max_tokens ?? "未设置";
               const reasonText =
                 lastFinishReason === "length"
                   ? `上游返回空内容（finish_reason: length，max_tokens: ${requestedMaxTokens}）。请调大 max_tokens 后重试。`
-                  : `上游返回空内容（finish_reason: ${lastFinishReason}）`;
+                  : lastFinishReason
+                  ? `上游返回空内容（finish_reason: ${lastFinishReason}）`
+                  : "上游返回空内容（未携带 finish_reason）";
+              persistAssistantFailure(currentAiMsgId, `⚠️ ${reasonText}`);
               requestLog.warn(
                 {
                   endpointName: ep.name,
@@ -622,6 +638,10 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
           const nextContent = await executeTurn(currentMessages, nextAiMsg.id);
 
           if (nextContent === false) {
+            persistAssistantFailure(
+              nextAiMsg.id,
+              "⚠️ 回复中断或上游无有效内容，请点击重新生成。"
+            );
             return false;
           }
           if (nextContent !== "_HANDLED_INTERNALLY_") {
@@ -653,6 +673,10 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
       `data: ${JSON.stringify({
         error: `所有 API 端点均不可用：${getUpstreamErrorMessage(lastError)}`,
       })}\n\n`
+    );
+    persistAssistantFailure(
+      opts.aiMsgId,
+      `❌ 错误：所有 API 端点均不可用：${getUpstreamErrorMessage(lastError)}`
     );
     return false;
   }

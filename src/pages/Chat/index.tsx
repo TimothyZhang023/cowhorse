@@ -1221,14 +1221,28 @@ export default () => {
                               />
                             </div>
                           ) : (
-                            <div className="typing-placeholder">
-                              <span>AI 正在思考</span>
-                              <span className="typing-dots">
-                                <i />
-                                <i />
-                                <i />
-                              </span>
-                            </div>
+                            <>
+                              {loading && idx === lastAssistantIdx ? (
+                                <div className="typing-placeholder">
+                                  <span>AI 正在思考</span>
+                                  <span className="typing-dots">
+                                    <i />
+                                    <i />
+                                    <i />
+                                  </span>
+                                </div>
+                              ) : (
+                                <div
+                                  style={{
+                                    color: "var(--text-tertiary)",
+                                    fontSize: 14,
+                                  }}
+                                >
+                                  ⚠️
+                                  这条回复未完成（可能因刷新或上游中断），请点击重新生成。
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
