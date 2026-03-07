@@ -290,6 +290,20 @@ function isUnsupportedStreamOptionsError(error) {
   );
 }
 
+function stringifyDeltaText(value) {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.content === "string") return part.content;
+      if (typeof part?.reasoning === "string") return part.reasoning;
+      return "";
+    })
+    .join("");
+}
+
 function finalizeSse(res) {
   if (res.writableEnded) return;
   res.write("data: [DONE]\n\n");
@@ -400,12 +414,26 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
           let completionTokens = 0;
           let chunkCount = 0;
           let firstContentAt = null;
+          let lastFinishReason = null;
 
           for await (const chunk of stream) {
             chunkCount++;
-            const delta = chunk.choices[0]?.delta || {};
+            const choice = chunk.choices?.[0] || {};
+            const delta = choice.delta || {};
+            lastFinishReason = choice.finish_reason || lastFinishReason;
 
-            if (delta.content) {
+            if (chunk?.error?.message) {
+              throw new Error(chunk.error.message);
+            }
+
+            const deltaContent = stringifyDeltaText(delta.content);
+            const deltaRefusal = stringifyDeltaText(delta.refusal);
+            const deltaReasoning = stringifyDeltaText(
+              delta.reasoning || delta.reasoning_content
+            );
+            const emittedText = deltaContent || deltaRefusal || deltaReasoning;
+
+            if (emittedText) {
               if (!firstContentAt) {
                 firstContentAt = Date.now();
                 requestLog.info(
@@ -417,9 +445,9 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
                   "Received first upstream content chunk"
                 );
               }
-              fullTextContent += delta.content;
+              fullTextContent += emittedText;
               res.write(
-                `data: ${JSON.stringify({ content: delta.content })}\n\n`
+                `data: ${JSON.stringify({ content: emittedText })}\n\n`
               );
             }
 
@@ -458,6 +486,7 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               toolCallCount: toolCalls.filter(Boolean).length,
               promptTokens,
               completionTokens,
+              lastFinishReason,
             },
             "Upstream stream completed"
           );
@@ -485,6 +514,23 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
 
           // CASE 1: No tools
           if (finalToolCalls.length === 0) {
+            if (
+              !fullTextContent.trim() &&
+              lastFinishReason &&
+              lastFinishReason !== "stop"
+            ) {
+              const reasonText = `上游返回空内容（finish_reason: ${lastFinishReason}）`;
+              requestLog.warn(
+                {
+                  endpointName: ep.name,
+                  baseURL,
+                  lastFinishReason,
+                },
+                "Upstream completed without content"
+              );
+              res.write(`data: ${JSON.stringify({ error: reasonText })}\n\n`);
+              return false;
+            }
             return fullTextContent;
           }
 
