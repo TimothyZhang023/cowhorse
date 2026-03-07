@@ -3,9 +3,11 @@ import cors from "cors";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import fs from "fs";
+import http from "http";
 import { dirname, join } from "path";
 import pinoHttp from "pino-http";
 import { fileURLToPath } from "url";
+import { createProxyMiddleware } from "http-proxy-middleware";
 import { logger } from "./utils/logger.js";
 
 import accountRoutes from "./routes/account.js";
@@ -19,14 +21,27 @@ import proxyRoutes from "./routes/proxy.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+function isApiLikePath(pathname = "") {
+  return (
+    pathname === "/health" ||
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/v1")
+  );
+}
+
 export function createApp() {
   const app = express();
+  const frontendDevUrl = (process.env.FRONTEND_DEV_URL || "").trim();
+  const enableFrontendProxy = Boolean(frontendDevUrl);
+  const distDir = join(__dirname, "../dist");
 
   app.use(pinoHttp({ logger }));
   app.use(cors());
   app.use(cookieParser());
   app.use(express.json({ limit: "20mb" })); // 支持 base64 图片上传
-  app.use(express.static(join(__dirname, "../dist")));
+  if (!enableFrontendProxy) {
+    app.use(express.static(distDir));
+  }
 
   app.get("/health", (req, res) => {
     res.json({ status: "ok" });
@@ -56,27 +71,64 @@ export function createApp() {
   // OpenAI 兼容代理 (/v1)
   app.use("/v1", apiLimiter, proxyRoutes);
 
-  // 处理 SPA 前端路由
-  app.get("*", (req, res) => {
-    const indexPath = join(__dirname, "../dist/index.html");
-    if (fs.existsSync(indexPath)) {
-      res.sendFile(indexPath);
-    } else {
-      res.send(
-        'Frontend not built. Please run "npm run build" or use "start_all.bat" to build the frontend.'
-      );
-    }
-  });
+  if (enableFrontendProxy) {
+    const frontendProxy = createProxyMiddleware({
+      target: frontendDevUrl,
+      changeOrigin: true,
+      ws: true,
+      xfwd: true,
+      logLevel: "warn",
+    });
+
+    app.use((req, res, next) => {
+      if (isApiLikePath(req.path)) {
+        return next();
+      }
+      return frontendProxy(req, res, next);
+    });
+
+    app.locals.frontendWsProxy = frontendProxy;
+    app.locals.frontendDevUrl = frontendDevUrl;
+  } else {
+    // 处理 SPA 前端路由
+    app.get("*", (req, res) => {
+      const indexPath = join(distDir, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.send(
+          'Frontend not built. Please run "npm run build" or start dev mode.'
+        );
+      }
+    });
+  }
 
   return app;
 }
 
-export function startServer(port = 8866) {
+export function startServer(port = 8000) {
   const app = createApp();
+  const server = http.createServer(app);
+  const frontendWsProxy = app.locals.frontendWsProxy;
 
-  app.listen(port, "0.0.0.0", () => {
+  if (frontendWsProxy) {
+    server.on("upgrade", (req, socket, head) => {
+      const reqPath = (req.url || "").split("?")[0] || "";
+      if (!isApiLikePath(reqPath)) {
+        frontendWsProxy.upgrade(req, socket, head);
+      }
+    });
+  }
+
+  server.listen(port, "0.0.0.0", () => {
+    const frontendInfo = app.locals.frontendDevUrl
+      ? `, frontend proxy -> ${app.locals.frontendDevUrl}`
+      : "";
     console.log(`Server running at http://localhost:${port}`);
+    if (frontendInfo) {
+      console.log(`Mode: single-port dev${frontendInfo}`);
+    }
   });
 
-  return app;
+  return server;
 }

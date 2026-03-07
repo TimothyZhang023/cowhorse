@@ -1,87 +1,99 @@
-# Timo — AI Chat Client
+# cowhouse (CW)
 
-一个基于 OpenAI 兼容接口的私有化 AI 聊天应用，支持多端点配置、多模型切换和对话历史管理。
+一个面向个人使用的 AI Assistant Agent 工作台。当前内置模块为 `对话`，支持多 Endpoint、多模型、流式回复、会话管理、MCP 工具接入和统一 `/v1` 代理。
 
----
+## 功能概览
 
-## ✨ 功能特性
+- `Dashboard` 首页：欢迎语、模块入口、用量统计。
+- `对话` 模块：流式聊天、模型切换、会话搜索、重命名、删除、消息编辑与重新生成。
+- `Endpoint` 管理：支持 OpenAI Compatible、OpenAI、Gemini、OpenRouter。
+- `模型管理`：支持同步 Endpoint 模型列表，也支持手动维护。
+- `MCP` 集成：支持本地 `stdio` 和远程 `sse` 工具接入。
+- `统一网关`：提供 `/v1/*` OpenAI 兼容代理，便于外部工具接入。
+- `本地数据存储`：默认 SQLite，支持切换 MySQL。
 
-- **多 Endpoint 管理**：可在界面中添加、编辑和删除 API Endpoint（Base URL + API Key），支持设置默认端点。
-- **多模型切换**：每个 Endpoint 支持自定义模型列表，或使用内置预设模型列表。
-- **流式输出**：AI 回复以流式（SSE）方式逐字渲染，支持完整 Markdown 渲染。
-- **对话历史与设置**：自动保存所有会话与消息记录，支持修改系统提示词 (System Prompt) 及动态修改标题。
-- **消息编辑与重新生成**：支持随时编辑历史消息并截断重新生成后续对话。
-- **会话搜索**：侧边栏支持快速本地搜索历史对话。
-- **MCP Server 支持**：完整集成 Model Context Protocol (MCP)，支持连接本地（`stdio`）与远程（`sse`）MCP 插件。
-- **Function Calling 引擎**：内置支持递归函数调用（Tool Loop），自动将大语言模型与 MCP 插件结合，实现外部工具和数据的自动获取与执行。
-- **用户权限 & 用量统计**：提供团队角色 (Admin/User) 分别视图，提供全面用量统计和模型计费估算。
-- **平台化网关代理**：内置 `/v1` 兼容 API 代理点，可作为通用网关为其他 AI 开发工具（如 Cursor/Cline）提供统一转发和审计。
-- **数据本地化与安全性**：所有数据（用户、会话、API Key、MCP 配置）默认保存在本地 SQLite 数据库，也支持切换 MySQL，敏感信息经过 AES-256 加密，支持 JWT 和 HttpOnly Refresh Token 鉴权。
+相关文档：
 
-> 📖 关于该项目的完整演进路线与功能规划，请查看 [产品演进指南](./docs/timo_evolution_spec.md) 与 [架构任务拆解](./docs/project.md)。
+- [产品演进说明](/Users/zts1993/work/work/docs/timo_evolution_spec.md)
+- [架构拆解](/Users/zts1993/work/work/docs/project.md)
+- [CW 升级 spec](/Users/zts1993/work/work/docs/cw_upgrade_spec.md)
 
----
+## 技术栈
 
-## 🛠️ 技术栈
+| 层级 | 技术 |
+| --- | --- |
+| 前端 | Umi Max + React 18 |
+| UI | Ant Design 5 + Pro Components |
+| 后端 | Node.js + Express |
+| 数据库 | SQLite / MySQL |
+| AI 接口 | OpenAI SDK + OpenAI Compatible APIs |
+| 样式 | Tailwind CSS + 自定义 CSS |
 
-| 层级     | 技术                                                                   |
-| -------- | ---------------------------------------------------------------------- |
-| 前端框架 | [UmiJS (Max)](https://umijs.org/) + React 18                           |
-| UI 组件  | [Ant Design 5](https://ant.design/) + Pro Components                   |
-| 样式     | Tailwind CSS                                                           |
-| 后端     | Node.js + [Express](https://expressjs.com/)                            |
-| 数据库   | SQLite / MySQL（默认 SQLite）                                          |
-| AI 接入  | [openai SDK](https://github.com/openai/openai-node)（OpenAI 兼容接口） |
+## 快速启动
 
----
-
-## 🚀 快速启动
-
-### 前提条件
+### 前提
 
 - Node.js >= 18
 - npm >= 9
 
-### 方式一：开发模式
+### 开发模式
 
-同时启动前端开发服务器和后端服务器（支持热重载）：
+开发模式为前后端分端口：
 
 ```bash
 npm install
 npm run dev
 ```
 
-- 前端开发地址：`http://localhost:8000`
-- 后端 API 地址：`http://localhost:8866`
+访问地址：
 
-常用进程命令：
+- 前端：`http://localhost:8000`
+- 后端：`http://localhost:8080`
+
+常用命令：
 
 ```bash
-npm run stop        # 释放 8000 / 8866 端口
-npm run restart     # stop 后重启开发模式
+npm run stop
+npm run restart
 ```
 
-### 方式二：生产部署
+说明：
+
+- 前端页面：`/dashboard`、`/chat`、`/login`
+- 后端接口：`/api/*`
+- OpenAI 兼容代理：`/v1/*`
+
+### 生产模式
+
+生产模式由 Express 托管前端静态资源并统一监听 `8000`：
 
 ```bash
 npm install
 npm run build
-npm start
+npm run start
 ```
 
-构建产物输出到 `dist/` 目录，由 Express 直接托管，访问 `http://localhost:8866`。
-
-生产模式重启命令：
+或：
 
 ```bash
-npm run restart:prod
+npm run start:prod
 ```
 
----
+访问地址：
 
-### 数据库配置（SQLite / MySQL）
+- `http://localhost:8000`
 
-默认使用 SQLite（无需额外配置）。如需切换 MySQL，请先安装 `mysql2`（例如 `npm i mysql2`），然后设置以下环境变量：
+## 数据库配置
+
+默认使用 SQLite，无需额外配置。
+
+如需切换 MySQL，请先安装 `mysql2`：
+
+```bash
+npm i mysql2
+```
+
+然后配置环境变量：
 
 ```bash
 DB_CLIENT=mysql
@@ -89,121 +101,87 @@ DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_password
-DB_NAME=gemini_chat
+DB_NAME=cowhouse
 ```
 
-SQLite 模式下可用 `DB_PATH` 指定数据库文件路径。
+SQLite 可通过 `DB_PATH` 指定数据库文件位置。
 
-## ⚙️ 配置 API
+## Endpoint 配置
 
-应用启动后，在界面右上角打开**设置**：
+启动后在界面中打开 `设置`，配置上游 Endpoint：
 
-1. 点击 **添加 Endpoint**
-2. 填写：
-   - **名称**：如 `OpenAI` / `Gemini`
-   - **Base URL**：如 `https://api.openai.com/v1`
-   - **API Key**：你的密钥（`sk-...`）
-3. 设置为默认后即可开始聊天
+1. 添加 Endpoint
+2. 填写名称、Base URL、API Key
+3. 设置默认 Endpoint
+4. 在模型管理中同步或维护模型列表
 
-所有配置均加密存储在本地数据库，不会上传至任何服务器。
+常见示例：
 
----
+- OpenAI：`https://api.openai.com/v1`
+- Gemini OpenAI Compatible：`https://generativelanguage.googleapis.com/v1beta/openai`
+- OpenRouter：`https://openrouter.ai/api/v1`
 
-## � Docker 部署
-
-### 前提条件
-
-- 已安装 [Docker](https://www.docker.com/) 和 Docker Compose
-
-### 一键启动（推荐）
+## Docker 部署
 
 ```bash
 docker compose up -d --build
 ```
 
-服务启动后访问 `http://localhost:8866`
+默认访问：
 
-### 常用命令
+- `http://localhost:8000`
+
+常用命令：
 
 ```bash
-# 查看日志
 docker compose logs -f
-
-# 停止服务
 docker compose down
-
-# 更新代码后重新构建并启动
 docker compose up -d --build
-
-# 查看容器状态
 docker compose ps
 ```
 
-### 数据持久化
+如需调整暴露端口，修改 [docker-compose.yml](/Users/zts1993/work/work/docker-compose.yml) 的 `ports` 配置。
 
-所有数据（用户、会话、API Key）保存在 Docker named volume `timo_data` 中：
+## 项目结构
 
-```bash
-# 查看 volume 位置
-docker volume inspect timo_data
-
-# 备份数据库
-docker cp timo:/app/data/chat.db ./backup_chat.db
-```
-
-> **注意**：执行 `docker compose down -v` 会删除 volume 数据，请谨慎操作。
-
-### 修改端口
-
-如需将服务暴露到其他端口（如 80），修改 `docker-compose.yml`：
-
-```yaml
-ports:
-  - "80:8866"
-```
-
----
-
-```
-timo/
+```text
+work/
 ├── server/
-│   ├── app.js              # Express 应用初始化
-│   ├── server.js           # 服务器入口
+│   ├── app.js
+│   ├── routes/
 │   ├── middleware/
-│   │   └── auth.js         # Token 鉴权中间件
-│   ├── models/
-│   │   └── database.js     # SQLite 数据库模型
-│   │   └── mcpManager.js   # MCP Server 客户端管理与通信
-│   └── routes/
-│       ├── auth.js         # 注册/登录接口
-│       ├── conversations.js # 会话、流式聊天与 Tool Loop 接口
-│       ├── endpoints.js    # Endpoint 管理接口
-│       └── mcp.js          # MCP 配置管理接口
+│   └── models/
 ├── src/
 │   ├── pages/
-│   │   ├── Chat/           # 聊天主页面（包含流式渲染、编辑、重生成等）
-│   │   └── Login/          # 登录页面
+│   │   ├── Dashboard/
+│   │   ├── Chat/
+│   │   └── Login/
 │   ├── components/
-│   │   ├── SettingsModal   # 设置弹窗组件
-│   │   └── McpModal        # MCP Server 配置组件
 │   ├── services/
-│   │   └── api.ts          # 前端 API 封装
 │   └── models/
-│       └── global.ts       # 全局状态管理
-├── data/                   # 本地数据库（已 gitignore）
-└── dist/                   # 构建输出目录
+├── docs/
+├── data/
+└── dist/
 ```
 
----
+## 安全说明
 
-## 🔒 数据安全说明
+- 本地数据库默认位于 `data/`，且不会提交到仓库。
+- API Key 存储在本地数据库中，不写入前端代码。
+- 登录采用 JWT + Refresh Token。
 
-- `data/` 目录（含 SQLite 数据库）已加入 `.gitignore`，**不会被提交到代码仓库**。
-- `.vscode/` 和 `.claude/` 等编辑器配置同样被排除。
-- API Key 仅存储在本地数据库，不会出现在任何代码文件中。
+## 测试
 
----
+```bash
+npm test
+```
 
-## 📄 许可证
+CI 模式：
 
-MIT License
+```bash
+npm run test:ci
+```
+
+## License
+
+MIT

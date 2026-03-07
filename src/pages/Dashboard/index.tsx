@@ -1,0 +1,289 @@
+import {
+  BarChartOutlined,
+  HomeOutlined,
+  LogoutOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  MessageOutlined,
+  MoonOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+  SunOutlined,
+} from "@ant-design/icons";
+import { history, request, useModel } from "@umijs/max";
+import {
+  Avatar,
+  Button,
+  Card,
+  Col,
+  ConfigProvider,
+  Empty,
+  Row,
+  Spin,
+  theme as antdTheme,
+} from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { AccountModal } from "@/components/AccountModal";
+import { SettingsModal } from "@/components/SettingsModal";
+import "./index.css";
+
+const getStoredBool = (key: string, fallback: boolean): boolean => {
+  const value = localStorage.getItem(key);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+};
+
+type UsageSummaryData = {
+  totals: {
+    total_tokens: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_requests: number;
+    models_used: number;
+    active_days: number;
+  };
+  byModel: Array<{ model: string; total_tokens: number; requests: number }>;
+  daily: Array<{
+    date: string;
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    requests: number;
+  }>;
+};
+
+export default () => {
+  const { currentUser, isLoggedIn, logout } = useModel("global");
+  const [moduleExpanded, setModuleExpanded] = useState<boolean>(() =>
+    getStoredBool("cw.module.expanded", true)
+  );
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem("timo-theme");
+    if (saved === "dark" || saved === "light") return saved;
+    return "light";
+  });
+  const [showAccount, setShowAccount] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [usageDays, setUsageDays] = useState<number>(30);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usage, setUsage] = useState<UsageSummaryData | null>(null);
+
+  const themeMode = useMemo<"light" | "dark">(() => {
+    return theme;
+  }, [theme]);
+
+  useEffect(() => {
+    if (!isLoggedIn) history.replace("/login");
+  }, [isLoggedIn]);
+
+  useEffect(() => {
+    localStorage.setItem("cw.module.expanded", String(moduleExpanded));
+  }, [moduleExpanded]);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("timo-theme", theme);
+  }, [theme]);
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    loadUsage();
+  }, [isLoggedIn, usageDays]);
+
+  if (!isLoggedIn) return null;
+
+  const isDark = themeMode === "dark";
+  const totals = usage?.totals;
+
+  const loadUsage = async () => {
+    setUsageLoading(true);
+    try {
+      const data = await request<UsageSummaryData>(
+        `/api/account/summary?days=${usageDays}`
+      );
+      setUsage(data);
+    } catch (error) {
+      setUsage(null);
+    } finally {
+      setUsageLoading(false);
+    }
+  };
+
+  return (
+    <ConfigProvider
+      wave={{ disabled: true }}
+      theme={{
+        algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+        token: { motion: false },
+      }}
+    >
+      <div className={`cw-dashboard-layout ${isDark ? "dark" : ""}`}>
+        <aside
+          className={`cw-dashboard-sider ${moduleExpanded ? "expanded" : "collapsed"}`}
+        >
+          <div className="cw-sider-top">
+            <div className="cw-sider-brand-row">
+              <div className="cw-sider-badge">CW</div>
+              {moduleExpanded && <span className="cw-sider-brand-text">cowhouse</span>}
+              <Button
+                type="text"
+                icon={moduleExpanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+                className="cw-sider-toggle"
+                onClick={() => setModuleExpanded((v) => !v)}
+              />
+            </div>
+
+            <Button
+              type="text"
+              icon={<HomeOutlined />}
+              className="cw-sider-btn cw-sider-btn-active"
+            >
+              {moduleExpanded && <span>Dashboard</span>}
+            </Button>
+            <Button
+              type="text"
+              icon={<MessageOutlined />}
+              className="cw-sider-btn"
+              onClick={() => history.push("/chat")}
+            >
+              {moduleExpanded && <span>对话</span>}
+            </Button>
+          </div>
+          <div className="cw-sider-bottom">
+            <Button
+              type="text"
+              icon={theme === "dark" ? <SunOutlined /> : <MoonOutlined />}
+              className="cw-sider-btn"
+              onClick={() => setTheme((v) => (v === "dark" ? "light" : "dark"))}
+            >
+              {moduleExpanded && <span>{theme === "dark" ? "浅色模式" : "深色模式"}</span>}
+            </Button>
+            <Button
+              type="text"
+              icon={<BarChartOutlined />}
+              className="cw-sider-btn"
+              onClick={() => setShowAccount(true)}
+            >
+              {moduleExpanded && <span>账户</span>}
+            </Button>
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              className="cw-sider-btn"
+              onClick={() => setShowSettings(true)}
+            >
+              {moduleExpanded && <span>设置</span>}
+            </Button>
+            <Button
+              type="text"
+              icon={<LogoutOutlined />}
+              className="cw-sider-btn cw-sider-btn-danger"
+              onClick={logout}
+            >
+              {moduleExpanded && <span>退出登录</span>}
+            </Button>
+          </div>
+        </aside>
+
+        <main className="cw-dashboard-main-wrap">
+          <header className="cw-dashboard-header">
+            <div>
+              <h1>cowhouse</h1>
+              <p>个人助理 Agent 工作台</p>
+            </div>
+            <div className="cw-user">
+              <span>{currentUser?.username}</span>
+              <Avatar style={{ backgroundColor: "#2563eb" }}>
+                {currentUser?.username?.[0]?.toUpperCase()}
+              </Avatar>
+            </div>
+          </header>
+
+          <section className="cw-dashboard-main">
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={12} lg={10}>
+                <Card className="cw-module-card" hoverable onClick={() => history.push("/chat")}>
+                  <MessageOutlined className="cw-module-icon" />
+                  <h3>对话</h3>
+                  <p>进入多模型对话模块，支持流式回复、模型切换与会话管理。</p>
+                </Card>
+              </Col>
+
+              <Col xs={24} md={12} lg={10}>
+                <Card className="cw-module-card">
+                  <div className="cw-usage-header">
+                    <div>
+                      <h3>用量统计</h3>
+                      <p>最近 {usageDays} 天</p>
+                    </div>
+                    <div className="cw-usage-actions">
+                      <Button
+                        size="small"
+                        type={usageDays === 7 ? "primary" : "default"}
+                        onClick={() => setUsageDays(7)}
+                      >
+                        7天
+                      </Button>
+                      <Button
+                        size="small"
+                        type={usageDays === 30 ? "primary" : "default"}
+                        onClick={() => setUsageDays(30)}
+                      >
+                        30天
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        onClick={loadUsage}
+                        loading={usageLoading}
+                      />
+                    </div>
+                  </div>
+                  {usageLoading ? (
+                    <div className="cw-usage-loading">
+                      <Spin size="small" />
+                    </div>
+                  ) : !totals ? (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="暂无统计数据"
+                    />
+                  ) : (
+                    <div className="cw-usage-grid">
+                      <div className="cw-usage-item">
+                        <div className="cw-usage-label">总请求数</div>
+                        <div className="cw-usage-value">
+                          {totals.total_requests.toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="cw-usage-item">
+                        <div className="cw-usage-label">总 Token</div>
+                        <div className="cw-usage-value">
+                          {totals.total_tokens.toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="cw-usage-item">
+                        <div className="cw-usage-label">使用模型数</div>
+                        <div className="cw-usage-value">{totals.models_used}</div>
+                      </div>
+                      <div className="cw-usage-item">
+                        <div className="cw-usage-label">活跃天数</div>
+                        <div className="cw-usage-value">{totals.active_days}</div>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            </Row>
+          </section>
+        </main>
+        <SettingsModal open={showSettings} onOpenChange={setShowSettings} />
+        <AccountModal
+          open={showAccount}
+          onClose={() => setShowAccount(false)}
+          isDark={theme === "dark"}
+        />
+      </div>
+    </ConfigProvider>
+  );
+};

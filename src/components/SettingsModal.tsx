@@ -30,9 +30,11 @@ import { McpModal } from "./McpModal";
 export const SettingsModal = ({
   open,
   onOpenChange,
+  onHistoryCleared,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onHistoryCleared?: () => void;
 }) => {
   const providerOptions = [
     { label: "OpenAI Compatible", value: "openai_compatible" },
@@ -405,12 +407,22 @@ export const SettingsModal = ({
                 onOk: async () => {
                   try {
                     const result = await clearAllHistory();
+                    if (!result?.success) {
+                      throw new Error("清空失败");
+                    }
                     message.success(
                       `已清空 ${result.deleted_conversations || 0} 个对话`
                     );
+                    window.dispatchEvent(new CustomEvent("cw.history.cleared"));
+                    onHistoryCleared?.();
                     onOpenChange(false);
-                  } catch (error) {
-                    message.error("清空失败，请重试");
+                  } catch (error: any) {
+                    const msg =
+                      error?.response?.data?.error ||
+                      error?.data?.error ||
+                      error?.message ||
+                      "清空失败，请重试";
+                    message.error(msg);
                   }
                 },
               });

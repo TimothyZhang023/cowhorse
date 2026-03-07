@@ -5,7 +5,7 @@
  * 使用 Timo 管理的 API Endpoint 和模型。
  *
  * 鉴权：Bearer <Timo API Key>（在用量统计 → API Keys 中创建）
- * Base URL: http://your-timo-host:8866/v1
+ * Base URL: http://your-timo-host:8000/v1
  *
  * 支持接口：
  *   GET  /v1/models              - 列出可用模型

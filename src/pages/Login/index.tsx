@@ -11,7 +11,7 @@ export default () => {
 
   useEffect(() => {
     if (isLoggedIn) {
-      history.replace("/chat");
+      history.replace("/dashboard");
     }
   }, [isLoggedIn]);
 
@@ -50,10 +50,12 @@ export default () => {
 
   return (
     <ConfigProvider
+      wave={{ disabled: true }}
       theme={{
         token: {
           colorPrimary: "#4f46e5",
           borderRadius: 12,
+          motion: false,
           fontFamily:
             "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
         },
@@ -61,75 +63,26 @@ export default () => {
     >
       <div
         style={{
-          background:
-            "linear-gradient(135deg, #e0e7ff 0%, #ede9fe 50%, #f3e8ff 100%)",
+          background: "linear-gradient(180deg, #eef2ff 0%, #f8fafc 100%)",
           minHeight: "100vh",
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
           position: "relative",
-          overflow: "hidden",
+          overflow: "auto",
         }}
       >
-        {/* Soft floating background blobs */}
-        <div
-          className="blob-float"
-          style={{
-            position: "absolute",
-            top: "-10%",
-            left: "-10%",
-            width: "40vw",
-            height: "40vw",
-            background: "linear-gradient(135deg, #a78bfa, #818cf8)",
-            borderRadius: "50%",
-            filter: "blur(100px)",
-            opacity: 0.6,
-          }}
-        />
-        <div
-          className="blob-float-delayed"
-          style={{
-            position: "absolute",
-            bottom: "-10%",
-            right: "-10%",
-            width: "40vw",
-            height: "40vw",
-            background: "linear-gradient(135deg, #c084fc, #e879f9)",
-            borderRadius: "50%",
-            filter: "blur(100px)",
-            opacity: 0.6,
-          }}
-        />
-        <div
-          className="blob-float"
-          style={{
-            position: "absolute",
-            top: "40%",
-            left: "60%",
-            width: "30vw",
-            height: "30vw",
-            background: "linear-gradient(135deg, #60a5fa, #3b82f6)",
-            borderRadius: "50%",
-            filter: "blur(100px)",
-            opacity: 0.4,
-            animationDelay: "-5s",
-          }}
-        />
-
         <div
           style={{
             position: "relative",
             width: "100%",
             maxWidth: 420,
             margin: "0 20px",
-            background: "rgba(255, 255, 255, 0.7)",
-            backdropFilter: "blur(20px)",
-            WebkitBackdropFilter: "blur(20px)",
+            background: "#ffffff",
             borderRadius: "24px",
-            boxShadow:
-              "0 25px 50px -12px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0,0,0,0.1)",
+            boxShadow: "0 12px 24px -12px rgba(0, 0, 0, 0.16)",
             padding: "40px 32px",
-            border: "1px solid rgba(255,255,255,0.8)",
+            border: "1px solid #e5e7eb",
           }}
         >
           <div style={{ textAlign: "center", marginBottom: 32 }}>
@@ -159,10 +112,10 @@ export default () => {
                 letterSpacing: "-0.5px",
               }}
             >
-              Gemini Chat
+              cowhouse (CW)
             </h1>
             <p style={{ marginTop: 8, color: "#6b7280", fontSize: 14 }}>
-              A premium AI conversation experience
+              Personal assistant agent workspace
             </p>
           </div>
 

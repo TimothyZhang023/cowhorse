@@ -4,26 +4,6 @@
 
 @import "katex/dist/katex.min.css";
 
-/* Floating blobs animation */
-@keyframes float {
-  0% {
-    transform: translateY(0px) scale(1);
-  }
-  50% {
-    transform: translateY(-30px) scale(1.05);
-  }
-  100% {
-    transform: translateY(0px) scale(1);
-  }
-}
-.blob-float {
-  animation: float 10s ease-in-out infinite;
-}
-.blob-float-delayed {
-  animation: float 12s ease-in-out infinite;
-  animation-delay: -5s;
-}
-
 * {
   box-sizing: border-box;
 }
@@ -32,4 +12,35 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", sans-serif;
+}
+
+/* Disable Ant Design popup/modal motions globally */
+[class*="ant-motion"],
+[class*="ant-fade"],
+[class*="ant-zoom"],
+[class*="ant-slide"],
+.ant-modal,
+.ant-modal-mask,
+.ant-modal-wrap,
+.ant-drawer,
+.ant-drawer-mask,
+.ant-drawer-content-wrapper,
+.ant-popover,
+.ant-tooltip,
+.ant-dropdown,
+.ant-select-dropdown,
+.ant-message,
+.ant-notification,
+.ant-wave {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

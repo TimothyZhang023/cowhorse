@@ -9,6 +9,7 @@ import db, {
   getConversation,
   getConversations,
   getEndpointGroups,
+  getModels,
   getMessages,
   logUsage,
   updateConversationSystemPrompt,
@@ -152,6 +153,24 @@ function getEndpoints(uid) {
   return groups.sort((a, b) => b.is_default - a.is_default);
 }
 
+function buildFallbackTitleFromUserText(text, maxLength = 12) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "新对话";
+  const sliced = normalized.slice(0, maxLength).trim();
+  return normalized.length > maxLength ? `${sliced}...` : sliced;
+}
+
+function updateTitleIfUntitled(conversationId, uid, nextTitle) {
+  const latest = getConversation(conversationId, uid);
+  if (!latest) return false;
+  const currentTitle = String(latest.title || "").trim();
+  if (currentTitle && currentTitle !== "新对话") return false;
+  const normalized = String(nextTitle || "").trim();
+  if (!normalized) return false;
+  updateConversationTitle(conversationId, uid, normalized);
+  return true;
+}
+
 async function summarizeConversationTitle(uid, conversationId, preferredModel) {
   const taskKey = `${uid}:${conversationId}`;
   if (titleSummaryInFlight.has(taskKey)) return;
@@ -175,7 +194,15 @@ async function summarizeConversationTitle(uid, conversationId, preferredModel) {
     const firstAssistant = history.find(
       (m) => m.role === "assistant" && m.content?.trim()
     );
-    if (!firstUser || !firstAssistant) return;
+    const fallbackTitle = firstUser
+      ? buildFallbackTitleFromUserText(extractDisplayText(firstUser.content))
+      : "";
+    if (!firstUser || !firstAssistant) {
+      if (fallbackTitle) {
+        updateTitleIfUntitled(conversationId, uid, fallbackTitle);
+      }
+      return;
+    }
 
     const userText = extractDisplayText(firstUser.content).slice(0, 400);
     const assistantText = extractDisplayText(firstAssistant.content).slice(
@@ -183,40 +210,90 @@ async function summarizeConversationTitle(uid, conversationId, preferredModel) {
       500
     );
     const endpoints = getEndpoints(uid);
-    if (!endpoints.length) return;
+    if (!endpoints.length) {
+      if (fallbackTitle) {
+        updateTitleIfUntitled(conversationId, uid, fallbackTitle);
+      }
+      return;
+    }
 
+    let sawSummaryFailure = false;
     for (const ep of endpoints) {
-      try {
-        const client = new OpenAI({ apiKey: ep.api_key, baseURL: ep.base_url });
-        const completion = await client.chat.completions.create({
-          model: preferredModel || "gpt-4o-mini",
-          temperature: 0.2,
-          max_tokens: 40,
-          messages: [
-            {
-              role: "system",
-              content:
-                "你是标题生成助手。请将对话总结为简短中文标题，长度 8-20 字，不要加引号、句号和前缀。",
-            },
-            {
-              role: "user",
-              content: `用户问题：${userText}\n\n助手回答摘要：${assistantText}\n\n请输出标题：`,
-            },
-          ],
-        });
+      const endpointModels = getModels(ep.id, uid)
+        .map((m) => String(m.model_id || "").trim())
+        .filter(Boolean);
+      const modelCandidates = [
+        String(preferredModel || "").trim(),
+        ...endpointModels,
+        "gpt-4o-mini",
+      ].filter(Boolean);
+      const dedupedModels = [...new Set(modelCandidates)];
+      const baseUrlCandidates = normalizeBaseUrlCandidates(ep.base_url);
 
-        const rawTitle = completion.choices?.[0]?.message?.content || "";
-        const normalized = rawTitle
-          .replace(/["'“”‘’。！？!?.]/g, "")
-          .trim()
-          .slice(0, 28);
-        if (!normalized) continue;
+      for (const baseURL of baseUrlCandidates) {
+        for (const modelId of dedupedModels) {
+          try {
+            const client = new OpenAI({
+              apiKey: ep.api_key,
+              baseURL,
+              timeout: 12000,
+            });
+            const completion = await client.chat.completions.create({
+              model: modelId,
+              temperature: 0.2,
+              max_tokens: 40,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "你是标题生成助手。请将对话总结为简短中文标题，长度 8-20 字，不要加引号、句号和前缀。",
+                },
+                {
+                  role: "user",
+                  content: `用户问题：${userText}\n\n助手回答摘要：${assistantText}\n\n请输出标题：`,
+                },
+              ],
+            });
 
-        updateConversationTitle(conversationId, uid, normalized);
-        return;
-      } catch (error) {
-        console.warn(
-          `[Title Summary] Endpoint "${ep.name}" failed: ${error.message}`
+            const rawTitle = completion.choices?.[0]?.message?.content || "";
+            const normalized = rawTitle
+              .replace(/["'“”‘’。！？!?.]/g, "")
+              .trim()
+              .slice(0, 28);
+            if (!normalized) continue;
+
+            if (updateTitleIfUntitled(conversationId, uid, normalized)) {
+              return;
+            }
+            return;
+          } catch (error) {
+            sawSummaryFailure = true;
+            const reason = getUpstreamErrorMessage(error);
+            console.warn(
+              `[Title Summary] Endpoint "${ep.name}" failed: baseURL=${baseURL}, model=${modelId}, reason=${reason}`
+            );
+
+            // 配额类错误直接回退，避免标题长期停留在“新对话”。
+            if (fallbackTitle && isQuotaLikeSummaryError(reason)) {
+              updateTitleIfUntitled(conversationId, uid, fallbackTitle);
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    if (fallbackTitle) {
+      const applied = updateTitleIfUntitled(conversationId, uid, fallbackTitle);
+      if (applied && sawSummaryFailure) {
+        logger.warn(
+          {
+            route: "conversations.summarizeTitle",
+            uid,
+            conversationId,
+            fallbackTitle,
+          },
+          "Title summary failed on all endpoints; applied fallback title"
         );
       }
     }
@@ -267,6 +344,16 @@ function getUpstreamErrorMessage(error) {
     error?.status || error?.response?.status || error?.cause?.status;
 
   return status ? `[${status}] ${rawMessage}` : rawMessage;
+}
+
+function isQuotaLikeSummaryError(reasonText) {
+  const text = String(reasonText || "").toLowerCase();
+  return (
+    text.includes("no accounts available") ||
+    text.includes("quota") ||
+    text.includes("insufficient_quota") ||
+    text.includes("token error")
+  );
 }
 
 function normalizeBaseUrlCandidates(baseUrl) {

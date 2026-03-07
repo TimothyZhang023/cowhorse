@@ -1,13 +1,13 @@
 {
-  "name": "gemini-chat-unified",
+  "name": "cowhouse",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "max build",
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:client": "max dev",
-    "dev:server": "node server.js",
+    "dev": "concurrently -n \"server,client\" -c \"blue,green\" \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "PORT=8000 max dev",
+    "dev:server": "PORT=8080 node server.js",
     "format": "prettier --write .",
     "postinstall": "max setup",
     "prepare": "husky install",
@@ -15,7 +15,7 @@
     "restart:prod": "npm run stop && npm run start:prod",
     "start:prod": "npm run build && npm run start",
     "start": "node server.js",
-    "stop": "kill-port 8000 8866",
+    "stop": "kill-port 8000 8080",
     "test": "vitest run",
     "test:ci": "vitest run --coverage.enabled=false",
     "test:watch": "vitest"

@@ -12,12 +12,18 @@ export default defineConfig({
     baseNavigator: true,
   },
   layout: {
-    title: "Gemini Chat",
+    title: "cowhouse (CW)",
   },
   routes: [
     {
       path: "/",
-      redirect: "/chat",
+      redirect: "/dashboard",
+    },
+    {
+      name: "Dashboard",
+      path: "/dashboard",
+      component: "./Dashboard",
+      layout: false,
     },
     {
       name: "Login",
@@ -37,7 +43,11 @@ export default defineConfig({
   esbuildMinifyIIFE: true,
   proxy: {
     "/api": {
-      target: "http://localhost:8866",
+      target: "http://localhost:8080",
+      changeOrigin: true,
+    },
+    "/v1": {
+      target: "http://localhost:8080",
       changeOrigin: true,
     },
   },

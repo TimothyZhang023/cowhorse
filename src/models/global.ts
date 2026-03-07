@@ -38,7 +38,7 @@ export default (): GlobalModel => {
       localStorage.setItem("token", token);
       // Update Umi's initialState
       await setInitialState((state) => ({ ...state, currentUser: user }));
-      history.push("/chat");
+      history.push("/dashboard");
     },
     [setInitialState]
   );

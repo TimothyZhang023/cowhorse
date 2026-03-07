@@ -14,14 +14,19 @@ import {
   updateConversation,
 } from "@/services/api";
 import {
+  AppstoreOutlined,
   BarChartOutlined,
   CheckOutlined,
   CloseOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  HomeOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
   MenuOutlined,
+  MenuUnfoldOutlined,
+  MessageOutlined,
   MoonOutlined,
   PictureOutlined,
   PlusOutlined,
@@ -78,6 +83,13 @@ const getStoredString = (key: string): string => {
   return localStorage.getItem(key) || "";
 };
 
+const getStoredBoolean = (key: string, fallback: boolean): boolean => {
+  const value = localStorage.getItem(key);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+};
+
 const getModelStorageKey = (endpointId: number | null) =>
   endpointId ? `timo.selected_model.${endpointId}` : "";
 
@@ -103,43 +115,27 @@ const extractDisplayContent = (content: string): string => {
 const hasImage = (content: string): boolean => content.includes("[IMAGE_DATA:");
 
 const STREAM_FLUSH_INTERVAL = 16;
-const STREAM_SEGMENT_DRAIN_INTERVAL = 22;
+const STREAM_SEGMENT_DRAIN_INTERVAL = 20;
+const TITLE_REFRESH_DELAYS = [1200, 2600, 5000, 9000];
 
 const splitIncomingStreamContent = (text: string): string[] => {
   const raw = String(text || "");
   if (!raw) return [];
-  if (raw.length <= 140) return [raw];
 
-  const parts = raw.match(/[^。！？!?；;，,\n]+[。！？!?；;，,\n]?|.+/g) || [
-    raw,
-  ];
+  // 打字机模式：按字符（含中文）逐步输出，标点优先单独落字。
+  const chars = Array.from(raw);
   const segments: string[] = [];
   let buffer = "";
 
-  for (const part of parts) {
-    if (!part) continue;
-    if ((buffer + part).length <= 96) {
-      buffer += part;
-      continue;
+  for (const ch of chars) {
+    buffer += ch;
+    if (/[。！？!?；;，,\s\n]/.test(ch) || buffer.length >= 3) {
+      segments.push(buffer);
+      buffer = "";
     }
-    if (buffer) segments.push(buffer);
-
-    if (part.length <= 96) {
-      buffer = part;
-      continue;
-    }
-
-    let start = 0;
-    while (start < part.length) {
-      const end = Math.min(start + 96, part.length);
-      segments.push(part.slice(start, end));
-      start = end;
-    }
-    buffer = "";
   }
-
   if (buffer) segments.push(buffer);
-  return segments.length ? segments : [raw];
+  return segments;
 };
 
 const getResponseErrorMessage = async (response: Response) => {
@@ -168,7 +164,12 @@ export default () => {
 
   // UI 状态
   const [theme, setTheme] = useState<"light" | "dark">(getStoredTheme);
-  const [siderVisible, setSiderVisible] = useState(false); // mobile drawer
+  const [moduleExpanded, setModuleExpanded] = useState<boolean>(() =>
+    getStoredBoolean("cw.module.expanded", true)
+  );
+  const [moduleDrawerVisible, setModuleDrawerVisible] = useState(false);
+  const [conversationDrawerVisible, setConversationDrawerVisible] =
+    useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const isDark = theme === "dark";
 
@@ -240,7 +241,6 @@ export default () => {
   const sseRemainderRef = useRef("");
   const streamSegmentQueueRef = useRef<string[]>([]);
   const streamSegmentDrainTimerRef = useRef<number | null>(null);
-  const [streamRenderTick, setStreamRenderTick] = useState(0);
 
   // 响应式监听
   useEffect(() => {
@@ -254,6 +254,10 @@ export default () => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("timo-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("cw.module.expanded", String(moduleExpanded));
+  }, [moduleExpanded]);
 
   // 生成参数持久化
   useEffect(() => {
@@ -281,6 +285,39 @@ export default () => {
     }
     loadInitData();
   }, [isLoggedIn]);
+
+  useEffect(() => {
+    const handleHistoryCleared = () => {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      if (streamFlushTimerRef.current !== null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
+      if (streamSegmentDrainTimerRef.current !== null) {
+        window.clearTimeout(streamSegmentDrainTimerRef.current);
+        streamSegmentDrainTimerRef.current = null;
+      }
+      streamBufferRef.current = "";
+      streamErrorRef.current = null;
+      streamTargetIndexRef.current = null;
+      streamSegmentQueueRef.current = [];
+      sseRemainderRef.current = "";
+      setLoading(false);
+      setInputText("");
+      setPendingImages((prev) => {
+        prev.forEach((item) => URL.revokeObjectURL(item.preview));
+        return [];
+      });
+      setConversations([]);
+      setCurrentConvId(null);
+      setMessages([]);
+      setSearchQuery("");
+    };
+    window.addEventListener("cw.history.cleared", handleHistoryCleared);
+    return () =>
+      window.removeEventListener("cw.history.cleared", handleHistoryCleared);
+  }, []);
 
   // 键盘快捷键
   useEffect(() => {
@@ -411,7 +448,6 @@ export default () => {
       return next;
     });
 
-    setStreamRenderTick((tick) => tick + 1);
   }, []);
 
   const scheduleStreamFlush = useCallback(() => {
@@ -505,7 +541,6 @@ export default () => {
         next[index] = { ...target, content };
         return next;
       });
-      setStreamRenderTick((tick) => tick + 1);
     },
     []
   );
@@ -541,7 +576,7 @@ export default () => {
       setConversations((prev) => [newConv, ...prev]);
       setCurrentConvId(newConv.id);
       setMessages([]);
-      if (isMobile) setSiderVisible(false);
+      if (isMobile) setConversationDrawerVisible(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     } catch (error) {
       console.error(error);
@@ -556,7 +591,7 @@ export default () => {
     } catch (error) {
       console.error(error);
     }
-    if (isMobile) setSiderVisible(false);
+    if (isMobile) setConversationDrawerVisible(false);
   };
 
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
@@ -787,11 +822,13 @@ export default () => {
     await streamChat(convId, userMsg, false);
 
     if (shouldSummarizeTitle) {
-      summarizeConversationTitle(convId, selectedModel).catch((e) =>
-        console.error(e)
-      );
-      // 异步总结会有延迟，稍后刷新会话列表拿到新标题
-      setTimeout(() => refreshConversations(), 2000);
+      summarizeConversationTitle(convId).catch((e) => console.error(e));
+      // 异步总结可能耗时较长，分段刷新会话列表以拿到新标题
+      TITLE_REFRESH_DELAYS.forEach((delay) => {
+        window.setTimeout(() => {
+          refreshConversations();
+        }, delay);
+      });
     }
   };
 
@@ -1002,136 +1039,166 @@ export default () => {
     searchText: `${model.model_id} ${model.display_name}`.toLowerCase(),
   }));
 
-  // Sidebar 内容
-  const siderContent = (
-    <div className={`sider-inner ${isDark ? "dark" : ""}`}>
-      <div className="sider-top">
+  const moduleNavContent = (
+    <div
+      className={`module-nav ${isDark ? "dark" : ""} ${
+        moduleExpanded ? "expanded" : "collapsed"
+      }`}
+    >
+      <div className="module-nav-top">
+        <div className="module-brand-row">
+          <div className="module-brand">CW</div>
+          {moduleExpanded && <span className="module-brand-text">cowhouse</span>}
+          {!isMobile && (
+            <Button
+              type="text"
+              className="module-toggle-btn"
+              icon={moduleExpanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+              onClick={() => setModuleExpanded((v) => !v)}
+            />
+          )}
+        </div>
         <Button
           type="text"
+          icon={<HomeOutlined />}
+          className="module-btn"
+          onClick={() => history.push("/dashboard")}
+        >
+          {moduleExpanded && <span>Dashboard</span>}
+        </Button>
+        <Button
+          type="text"
+          icon={<MessageOutlined />}
+          className="module-btn module-btn-active"
+        >
+          {moduleExpanded && <span>对话</span>}
+        </Button>
+      </div>
+
+      <div className="module-nav-bottom">
+        <Button
+          type="text"
+          icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+          className="module-btn"
+          onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+        >
+          {moduleExpanded && <span>{isDark ? "浅色模式" : "深色模式"}</span>}
+        </Button>
+        <Button
+          type="text"
+          icon={<BarChartOutlined />}
+          className="module-btn"
+          onClick={() => setShowAccount(true)}
+        >
+          {moduleExpanded && <span>{intl.formatMessage({ id: "account.title" })}</span>}
+        </Button>
+        <Button
+          type="text"
+          icon={<SettingOutlined />}
+          className="module-btn"
+          onClick={() => setShowSettings(true)}
+        >
+          {moduleExpanded && <span>{intl.formatMessage({ id: "chat.settings" })}</span>}
+        </Button>
+        <Button
+          type="text"
+          icon={<LogoutOutlined />}
+          className="module-btn module-btn-danger"
+          onClick={logout}
+        >
+          {moduleExpanded && <span>退出登录</span>}
+        </Button>
+      </div>
+    </div>
+  );
+
+  const conversationListContent = (
+    <div className={`conversation-panel ${isDark ? "dark" : ""}`}>
+      <div className="conversation-panel-header">
+        <div className="conversation-panel-title">
+          <AppstoreOutlined />
+          <span>对话列表</span>
+        </div>
+        <Button
+          type="primary"
           icon={<PlusOutlined />}
+          size="small"
           onClick={handleCreateChat}
-          className="new-chat-btn"
           title={intl.formatMessage({ id: "chat.new_chat" }) + " (Ctrl+N)"}
         >
-          {intl.formatMessage({ id: "chat.new_chat" })}
+          新建
         </Button>
+      </div>
 
-        <div className="conv-list">
-          <div className="conv-list-header" style={{ padding: "0 8px 12px" }}>
-            <Input.Search
-              placeholder="搜索对话..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              allowClear
-              size="small"
-            />
-          </div>
-          {filteredConversations.map((conv) => (
-            <div
-              key={conv.id}
-              className={`conversation-item ${
-                currentConvId === conv.id ? "active" : ""
-              }`}
-              onClick={() => handleSelectConversation(conv.id)}
-            >
-              {editingTitleId === conv.id ? (
-                <div
-                  className="title-edit"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <Input
-                    size="small"
-                    value={editingTitle}
-                    onChange={(e) => setEditingTitle(e.target.value)}
-                    onPressEnter={handleRenameConfirm}
-                    autoFocus
-                  />
+      <Input.Search
+        placeholder="搜索对话..."
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        allowClear
+        size="small"
+        className="conversation-search"
+      />
+
+      <div className="conversation-scroll">
+        {filteredConversations.map((conv) => (
+          <div
+            key={conv.id}
+            className={`conversation-item ${currentConvId === conv.id ? "active" : ""}`}
+            onClick={() => handleSelectConversation(conv.id)}
+          >
+            {editingTitleId === conv.id ? (
+              <div className="title-edit" onClick={(e) => e.stopPropagation()}>
+                <Input
+                  size="small"
+                  value={editingTitle}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onPressEnter={handleRenameConfirm}
+                  autoFocus
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CheckOutlined />}
+                  onClick={handleRenameConfirm}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CloseOutlined />}
+                  onClick={() => setEditingTitleId(null)}
+                />
+              </div>
+            ) : (
+              <>
+                <span className="conv-title">{conv.title}</span>
+                <div className="conv-actions">
                   <Button
                     type="text"
                     size="small"
-                    icon={<CheckOutlined />}
-                    onClick={handleRenameConfirm}
+                    icon={<EditOutlined />}
+                    className="action-btn"
+                    onClick={(e) => handleRenameStart(conv, e)}
                   />
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CloseOutlined />}
-                    onClick={() => setEditingTitleId(null)}
-                  />
-                </div>
-              ) : (
-                <>
-                  <span className="conv-title">{conv.title}</span>
-                  <div className="conv-actions">
+                  <Popconfirm
+                    title="删除对话"
+                    description="确定要删除这个对话吗？"
+                    onConfirm={(e) => handleDeleteConversation(conv.id, e as any)}
+                    onCancel={(e) => (e as any)?.stopPropagation()}
+                  >
                     <Button
                       type="text"
                       size="small"
-                      icon={<EditOutlined />}
-                      className="action-btn"
-                      onClick={(e) => handleRenameStart(conv, e)}
+                      icon={<DeleteOutlined />}
+                      className="action-btn delete-btn"
+                      onClick={(e) => e.stopPropagation()}
                     />
-                    <Popconfirm
-                      title="删除对话"
-                      description="确定要删除这个对话吗？"
-                      onConfirm={(e) =>
-                        handleDeleteConversation(conv.id, e as any)
-                      }
-                      onCancel={(e) => (e as any)?.stopPropagation()}
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        className="action-btn delete-btn"
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </Popconfirm>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-          {conversations.length === 0 && (
-            <div className="empty-conv">暂无对话记录</div>
-          )}
-        </div>
-      </div>
-
-      <div className="sider-bottom">
-        <Button
-          block
-          icon={isDark ? <SunOutlined /> : <MoonOutlined />}
-          onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
-          className="sider-action-btn"
-        >
-          {isDark ? "浅色模式" : "深色模式"}
-        </Button>
-        <Button
-          block
-          icon={<BarChartOutlined />}
-          onClick={() => setShowAccount(true)}
-          className="sider-action-btn"
-        >
-          {intl.formatMessage({ id: "account.title" }).split(" ")[0]}{" "}
-          {/* 简写 */}
-        </Button>
-        <Button
-          block
-          icon={<SettingOutlined />}
-          onClick={() => setShowSettings(true)}
-          className="sider-action-btn"
-        >
-          {intl.formatMessage({ id: "chat.settings" })}
-        </Button>
-        <Button
-          block
-          icon={<LogoutOutlined />}
-          onClick={logout}
-          className="sider-action-btn"
-          danger
-        >
-          退出登录
-        </Button>
+                  </Popconfirm>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+        {conversations.length === 0 && <div className="empty-conv">暂无对话记录</div>}
       </div>
     </div>
   );
@@ -1142,47 +1209,60 @@ export default () => {
 
   return (
     <ConfigProvider
+      wave={{ disabled: true }}
       theme={{
         algorithm: isDark
           ? antdTheme.darkAlgorithm
           : antdTheme.defaultAlgorithm,
+        token: {
+          motion: false,
+        },
       }}
     >
       <Layout className={`chat-layout ${isDark ? "dark" : ""}`}>
-        {/* Desktop Sider */}
         {!isMobile && (
-          <Sider width={260} className="chat-sider">
-            {siderContent}
+          <Sider width={moduleExpanded ? 220 : 80} className="module-sider">
+            {moduleNavContent}
           </Sider>
         )}
 
-        {/* Mobile Drawer */}
         {isMobile && (
-          <Drawer
-            placement="left"
-            open={siderVisible}
-            onClose={() => setSiderVisible(false)}
-            width={260}
-            styles={{ body: { padding: 0 } }}
-            title={null}
-          >
-            {siderContent}
-          </Drawer>
+          <>
+            <Drawer
+              placement="left"
+              open={moduleDrawerVisible}
+              onClose={() => setModuleDrawerVisible(false)}
+              width={220}
+              styles={{ body: { padding: 0 } }}
+              title={null}
+            >
+              {moduleNavContent}
+            </Drawer>
+            <Drawer
+              placement="right"
+              open={conversationDrawerVisible}
+              onClose={() => setConversationDrawerVisible(false)}
+              width={320}
+              styles={{ body: { padding: 0 } }}
+              title={null}
+            >
+              {conversationListContent}
+            </Drawer>
+          </>
         )}
 
         <Layout>
           <Content className="chat-content">
-            {/* Header */}
             <div className="chat-header">
               <div className="header-left">
                 {isMobile && (
                   <Button
                     type="text"
                     icon={<MenuOutlined />}
-                    onClick={() => setSiderVisible(true)}
+                    onClick={() => setModuleDrawerVisible(true)}
                   />
                 )}
-                <span className="header-title">Gemini Chat</span>
+                <span className="header-title">CW · 对话</span>
                 {currentConvId && (
                   <Tooltip
                     title={
@@ -1209,6 +1289,15 @@ export default () => {
                 )}
               </div>
               <div className="header-right">
+                {isMobile && (
+                  <Tooltip title="对话列表">
+                    <Button
+                      type="text"
+                      icon={<AppstoreOutlined />}
+                      onClick={() => setConversationDrawerVisible(true)}
+                    />
+                  </Tooltip>
+                )}
                 {models.length >= 2 && (
                   <Tooltip title="多模型并行对比">
                     <Button
@@ -1232,186 +1321,171 @@ export default () => {
               </div>
             </div>
 
-            {/* Messages */}
-            <div className="messages-area">
-              {messages.length === 0 ? (
-                <div className="empty-messages">
-                  <div className="empty-icon">✨</div>
-                  <div className="empty-title">有什么我可以帮你的？</div>
-                  <div className="empty-hint">按 Ctrl+N 创建新对话</div>
-                </div>
-              ) : (
-                messages.map((msg, idx) => (
-                  <div key={idx} className={`message-row ${msg.role}`}>
-                    {msg.role === "assistant" && (
-                      <Avatar className="msg-avatar assistant-avatar" size={32}>
-                        AI
-                      </Avatar>
-                    )}
-                    <div className={`message-bubble ${msg.role}`}>
-                      {msg.role === "user" ? (
-                        <div className="user-content">
-                          {hasImage(msg.content) && (
-                            <div className="image-preview-row">📷 图片</div>
-                          )}
-                          {editingMsgId === msg.id ? (
-                            <div className="edit-message-container">
-                              <Input.TextArea
-                                autoSize={{ minRows: 2, maxRows: 10 }}
-                                value={editingMsgContent}
-                                onChange={(e) =>
-                                  setEditingMsgContent(e.target.value)
-                                }
-                                className="edit-message-input"
-                                disabled={loading}
-                              />
-                              <div
-                                className="edit-message-actions"
-                                style={{ marginTop: 8, textAlign: "right" }}
-                              >
-                                <Button
-                                  size="small"
-                                  onClick={() => setEditingMsgId(null)}
-                                  disabled={loading}
-                                  style={{ marginRight: 8 }}
-                                >
-                                  取消
-                                </Button>
-                                <Button
-                                  size="small"
-                                  type="primary"
-                                  onClick={() => handleSaveEdit(msg.id!)}
-                                  loading={loading}
-                                >
-                                  发送 / 重新生成
-                                </Button>
-                              </div>
-                            </div>
-                          ) : (
-                            extractDisplayContent(msg.content)
-                          )}
-                        </div>
-                      ) : (
-                        <div
-                          className={
-                            loading && idx === lastAssistantIdx
-                              ? "assistant-streaming"
-                              : ""
-                          }
-                        >
-                          {msg.content ? (
-                            <div
-                              key={
-                                loading && idx === lastAssistantIdx
-                                  ? `stream-${streamRenderTick}`
-                                  : `static-${idx}`
-                              }
-                              className="stream-fade-shell"
-                              data-streaming={
-                                loading && idx === lastAssistantIdx
-                              }
-                            >
-                              <MarkdownRenderer
-                                content={msg.content}
-                                isDark={isDark}
-                              />
-                            </div>
-                          ) : (
-                            <>
-                              {loading && idx === lastAssistantIdx ? (
-                                <div className="typing-placeholder">
-                                  <span>AI 正在思考</span>
-                                  <span className="typing-dots">
-                                    <i />
-                                    <i />
-                                    <i />
-                                  </span>
+            <div className="chat-main">
+              <div className="chat-center">
+                <div className="messages-area">
+                  {messages.length === 0 ? (
+                    <div className="empty-messages">
+                      <div className="empty-icon">✨</div>
+                      <div className="empty-title">有什么我可以帮你的？</div>
+                      <div className="empty-hint">按 Ctrl+N 创建新对话</div>
+                    </div>
+                  ) : (
+                    messages.map((msg, idx) => (
+                      <div key={idx} className={`message-row ${msg.role}`}>
+                        {msg.role === "assistant" && (
+                          <Avatar className="msg-avatar assistant-avatar" size={32}>
+                            AI
+                          </Avatar>
+                        )}
+                        <div className={`message-bubble ${msg.role}`}>
+                          {msg.role === "user" ? (
+                            <div className="user-content">
+                              {hasImage(msg.content) && (
+                                <div className="image-preview-row">📷 图片</div>
+                              )}
+                              {editingMsgId === msg.id ? (
+                                <div className="edit-message-container">
+                                  <Input.TextArea
+                                    autoSize={{ minRows: 2, maxRows: 10 }}
+                                    value={editingMsgContent}
+                                    onChange={(e) =>
+                                      setEditingMsgContent(e.target.value)
+                                    }
+                                    className="edit-message-input"
+                                    disabled={loading}
+                                  />
+                                  <div
+                                    className="edit-message-actions"
+                                    style={{ marginTop: 8, textAlign: "right" }}
+                                  >
+                                    <Button
+                                      size="small"
+                                      onClick={() => setEditingMsgId(null)}
+                                      disabled={loading}
+                                      style={{ marginRight: 8 }}
+                                    >
+                                      取消
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      type="primary"
+                                      onClick={() => handleSaveEdit(msg.id!)}
+                                      loading={loading}
+                                    >
+                                      发送 / 重新生成
+                                    </Button>
+                                  </div>
                                 </div>
                               ) : (
-                                <div
-                                  style={{
-                                    color: "var(--text-tertiary)",
-                                    fontSize: 14,
-                                  }}
-                                >
-                                  ⚠️
-                                  这条回复未完成（可能因刷新或上游中断），请点击重新生成。
-                                </div>
+                                extractDisplayContent(msg.content)
                               )}
-                            </>
+                            </div>
+                          ) : (
+                            <div
+                              className={
+                                loading && idx === lastAssistantIdx
+                                  ? "assistant-streaming"
+                                  : ""
+                              }
+                            >
+                              {msg.content ? (
+                                <div
+                                  className="stream-fade-shell"
+                                  data-streaming={loading && idx === lastAssistantIdx}
+                                >
+                                  <MarkdownRenderer content={msg.content} isDark={isDark} />
+                                </div>
+                              ) : (
+                                <>
+                                  {loading && idx === lastAssistantIdx ? (
+                                    <div className="typing-placeholder">
+                                      <span>AI 正在思考</span>
+                                      <span className="typing-dots">
+                                        <i />
+                                        <i />
+                                        <i />
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div
+                                      style={{
+                                        color: "var(--text-tertiary)",
+                                        fontSize: 14,
+                                      }}
+                                    >
+                                      ⚠️ 这条回复未完成（可能因刷新或上游中断），请点击重新生成。
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
-                    {/* Message Actions */}
-                    <div className={`msg-actions ${msg.role}`}>
-                      <Tooltip title="复制">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<CopyOutlined />}
-                          onClick={() => handleCopyMessage(msg.content)}
-                          className="msg-action-btn"
-                        />
-                      </Tooltip>
-                      {msg.role === "user" && msg.id && !loading && (
-                        <Tooltip title="编辑">
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<EditOutlined />}
-                            onClick={() => {
-                              setEditingMsgId(msg.id!);
-                              setEditingMsgContent(
-                                extractDisplayContent(msg.content)
-                              );
-                            }}
-                            className="msg-action-btn"
-                          />
-                        </Tooltip>
-                      )}
-                      {msg.role === "assistant" &&
-                        idx === lastAssistantIdx &&
-                        !loading && (
-                          <Tooltip title="重新生成">
+                        <div className={`msg-actions ${msg.role}`}>
+                          <Tooltip title="复制">
                             <Button
                               type="text"
                               size="small"
-                              icon={<ReloadOutlined />}
-                              onClick={handleRegenerate}
+                              icon={<CopyOutlined />}
+                              onClick={() => handleCopyMessage(msg.content)}
                               className="msg-action-btn"
                             />
                           </Tooltip>
-                        )}
-                    </div>
-                  </div>
-                ))
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Area */}
-            <div className="input-area">
-              {/* Pending Images Preview */}
-              {pendingImages.length > 0 && (
-                <div className="pending-images">
-                  {pendingImages.map((img, i) => (
-                    <div key={i} className="pending-image-item">
-                      <img src={img.preview} alt="upload" />
-                      <Button
-                        type="text"
-                        size="small"
-                        danger
-                        icon={<CloseOutlined />}
-                        className="remove-image-btn"
-                        onClick={() => handleImageRemove(i)}
-                      />
-                    </div>
-                  ))}
+                          {msg.role === "user" && msg.id && !loading && (
+                            <Tooltip title="编辑">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => {
+                                  setEditingMsgId(msg.id!);
+                                  setEditingMsgContent(
+                                    extractDisplayContent(msg.content)
+                                  );
+                                }}
+                                className="msg-action-btn"
+                              />
+                            </Tooltip>
+                          )}
+                          {msg.role === "assistant" && idx === lastAssistantIdx && !loading && (
+                            <Tooltip title="重新生成">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<ReloadOutlined />}
+                                onClick={handleRegenerate}
+                                className="msg-action-btn"
+                              />
+                            </Tooltip>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={messagesEndRef} />
                 </div>
-              )}
 
-              <div className="input-container">
+                <div className="input-area">
+                  {pendingImages.length > 0 && (
+                    <div className="pending-images">
+                      {pendingImages.map((img, i) => (
+                        <div key={i} className="pending-image-item">
+                          <img src={img.preview} alt="upload" />
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            icon={<CloseOutlined />}
+                            className="remove-image-btn"
+                            onClick={() => handleImageRemove(i)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="input-container">
                 <Tooltip title="上传图片">
                   <Upload
                     accept="image/*"
@@ -1439,7 +1513,7 @@ export default () => {
                       sendMessage();
                     }
                   }}
-                  placeholder="问问 Timo… (Shift+Enter 换行 / Enter 发送)"
+                  placeholder="问问 CW… (Shift+Enter 换行 / Enter 发送)"
                   autoSize={{ minRows: 1, maxRows: 6 }}
                   bordered={false}
                   disabled={loading}
@@ -1567,9 +1641,13 @@ export default () => {
                   />
                 )}
               </div>
-              <div className="input-hint">
-                Timo 是一款 AI 工具，其回答未必正确无误。Shift+Enter 换行
+                  <div className="input-hint">
+                    CW 是一款 AI 工具，其回答未必正确无误。Shift+Enter 换行
+                  </div>
+                </div>
               </div>
+
+              {!isMobile && conversationListContent}
             </div>
           </Content>
         </Layout>
@@ -1579,6 +1657,12 @@ export default () => {
           onOpenChange={(v) => {
             setShowSettings(v);
             if (!v) loadInitData();
+          }}
+          onHistoryCleared={() => {
+            setConversations([]);
+            setCurrentConvId(null);
+            setMessages([]);
+            setSearchQuery("");
           }}
         />
         <SystemPromptModal

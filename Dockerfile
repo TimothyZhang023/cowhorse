@@ -39,10 +39,10 @@ COPY server/        ./server/
 # 数据目录（SQLite 数据库会写在这里，挂载 Volume 持久化）
 RUN mkdir -p /app/data
 
-EXPOSE 8866
+EXPOSE 8000
 
 # 环境变量（可通过 docker run -e 或 compose 覆盖）
 ENV NODE_ENV=production
-ENV PORT=8866
+ENV PORT=8000
 
 CMD ["node", "server.js"]
