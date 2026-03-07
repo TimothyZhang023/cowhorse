@@ -5,7 +5,7 @@ import {
   EyeOutlined,
 } from "@ant-design/icons";
 import { Button, Tooltip } from "antd";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
@@ -21,6 +21,47 @@ interface MarkdownRendererProps {
   content: string;
   isDark?: boolean;
 }
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const toThinkDetails = (rawBody: string) => {
+  const body = String(rawBody || "").trim();
+  if (!body) return "";
+  return `<details class="think-block"><summary>思考过程</summary><pre>${escapeHtml(
+    body
+  )}</pre></details>`;
+};
+
+const normalizeThinkingBlocks = (rawContent: string) => {
+  if (!rawContent) return rawContent;
+
+  let normalized = rawContent;
+
+  normalized = normalized.replace(
+    /```(?:think|thinking|reasoning|analysis)\s*([\s\S]*?)```/gi,
+    (_, body) => `<think>\n${body}\n</think>`
+  );
+  normalized = normalized.replace(
+    /<(thinking|reasoning|analysis)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
+    (_, _tag, body) => `<think>\n${body}\n</think>`
+  );
+  normalized = normalized.replace(
+    /\[(?:think|thinking|reasoning|analysis)\]([\s\S]*?)\[\/(?:think|thinking|reasoning|analysis)\]/gi,
+    (_, body) => `<think>\n${body}\n</think>`
+  );
+  normalized = normalized.replace(
+    /<think(?:\s[^>]*)?>([\s\S]*?)<\/think>/gi,
+    (_, body) => toThinkDetails(body)
+  );
+
+  return normalized;
+};
 
 function CodeBlock({
   language,
@@ -116,6 +157,11 @@ export const MarkdownRenderer = ({
   content,
   isDark = false,
 }: MarkdownRendererProps) => {
+  const normalizedContent = useMemo(
+    () => normalizeThinkingBlocks(content),
+    [content]
+  );
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath] as any[]}
@@ -158,7 +204,7 @@ export const MarkdownRenderer = ({
         },
       }}
     >
-      {content}
+      {normalizedContent}
     </ReactMarkdown>
   );
 };

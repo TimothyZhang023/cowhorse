@@ -337,40 +337,49 @@ function collectTextFragments(value, depth = 0) {
   return fragments;
 }
 
-function extractStreamText(choice, chunk) {
-  const delta = choice?.delta || {};
-  const candidates = [
-    delta.content,
-    delta.text,
-    delta.refusal,
-    delta.reasoning,
-    delta.reasoning_content,
-    delta.thinking,
-    delta.thinking_content,
-    delta.output_text,
-    choice?.message?.content,
-    choice?.message?.reasoning,
-    choice?.message?.reasoning_content,
-    choice?.message?.thinking,
-    choice?.message?.thinking_content,
-    chunk?.content,
-    chunk?.reasoning,
-    chunk?.reasoning_content,
-    chunk?.thinking,
-    chunk?.thinking_content,
-    chunk?.output_text,
-  ];
-
+function collectUniqueText(candidates) {
   const seen = new Set();
   const parts = [];
-  for (const candidate of candidates) {
+  for (const candidate of candidates || []) {
     const text = collectTextFragments(candidate).join("");
     if (!text || seen.has(text)) continue;
     seen.add(text);
     parts.push(text);
   }
-
   return parts.join("");
+}
+
+function extractStreamParts(choice, chunk) {
+  const delta = choice?.delta || {};
+
+  const answerText = collectUniqueText([
+    delta.content,
+    delta.text,
+    delta.output_text,
+    delta.refusal,
+    choice?.message?.content,
+    choice?.message?.text,
+    chunk?.content,
+    chunk?.text,
+    chunk?.output_text,
+  ]);
+
+  const reasoningText = collectUniqueText([
+    delta.reasoning,
+    delta.reasoning_content,
+    delta.thinking,
+    delta.thinking_content,
+    choice?.message?.reasoning,
+    choice?.message?.reasoning_content,
+    choice?.message?.thinking,
+    choice?.message?.thinking_content,
+    chunk?.reasoning,
+    chunk?.reasoning_content,
+    chunk?.thinking,
+    chunk?.thinking_content,
+  ]);
+
+  return { answerText, reasoningText };
 }
 
 function finalizeSse(res) {
@@ -498,6 +507,7 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
           let emptyTextChunkCount = 0;
           let firstContentAt = null;
           let lastFinishReason = null;
+          let reasoningOpen = false;
           const observedDeltaKeys = new Set();
 
           for await (const chunk of stream) {
@@ -513,7 +523,25 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               throw new Error(chunk.error.message);
             }
 
-            const emittedText = extractStreamText(choice, chunk);
+            const { answerText, reasoningText } = extractStreamParts(
+              choice,
+              chunk
+            );
+            let emittedText = "";
+            if (reasoningText) {
+              if (!reasoningOpen) {
+                emittedText += "<think>\n";
+                reasoningOpen = true;
+              }
+              emittedText += reasoningText;
+            }
+            if (answerText) {
+              if (reasoningOpen) {
+                emittedText += "\n</think>\n\n";
+                reasoningOpen = false;
+              }
+              emittedText += answerText;
+            }
 
             if (emittedText) {
               if (!firstContentAt) {
@@ -566,6 +594,14 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               promptTokens = chunk.usage.prompt_tokens || 0;
               completionTokens = chunk.usage.completion_tokens || 0;
             }
+          }
+
+          if (reasoningOpen) {
+            const closeThinkingTag = "\n</think>\n";
+            fullTextContent += closeThinkingTag;
+            res.write(
+              `data: ${JSON.stringify({ content: closeThinkingTag })}\n\n`
+            );
           }
 
           requestLog.info(
