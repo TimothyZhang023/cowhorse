@@ -81,14 +81,12 @@ router.post("/chat/completions", async (req, res) => {
   } = req.body;
 
   if (!messages || !Array.isArray(messages)) {
-    return res
-      .status(400)
-      .json({
-        error: {
-          message: "messages 是必填字段",
-          type: "invalid_request_error",
-        },
-      });
+    return res.status(400).json({
+      error: {
+        message: "messages 是必填字段",
+        type: "invalid_request_error",
+      },
+    });
   }
 
   try {
@@ -97,14 +95,12 @@ router.post("/chat/completions", async (req, res) => {
       (a, b) => b.is_default - a.is_default
     );
     if (!endpoints.length) {
-      return res
-        .status(400)
-        .json({
-          error: {
-            message: "请先在 Timo 中配置 API Endpoint",
-            type: "invalid_request_error",
-          },
-        });
+      return res.status(400).json({
+        error: {
+          message: "请先在 Timo 中配置 API Endpoint",
+          type: "invalid_request_error",
+        },
+      });
     }
 
     let lastError = null;
@@ -182,14 +178,12 @@ router.post("/chat/completions", async (req, res) => {
       }
     }
 
-    res
-      .status(502)
-      .json({
-        error: {
-          message: `所有 API 端点均不可用：${lastError?.message}`,
-          type: "server_error",
-        },
-      });
+    res.status(502).json({
+      error: {
+        message: `所有 API 端点均不可用：${lastError?.message}`,
+        type: "server_error",
+      },
+    });
   } catch (error) {
     res
       .status(500)

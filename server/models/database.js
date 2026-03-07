@@ -154,7 +154,9 @@ db.exec(`
 `);
 
 try {
-  db.prepare('ALTER TABLE conversations ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL').run();
+  db.prepare(
+    "ALTER TABLE conversations ADD COLUMN folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL"
+  ).run();
 } catch (e) {
   /* column already exists */
 }
@@ -555,8 +557,8 @@ export function updateEndpointGroup(
     usePresetModels === undefined
       ? existing.use_preset_models
       : usePresetModels
-        ? 1
-        : 0;
+      ? 1
+      : 0;
 
   db.prepare(
     `
@@ -857,25 +859,56 @@ export function listMcpServers(uid) {
     .all(uid)
     .map((s) => ({
       ...s,
-      args: s.args ? JSON.parse(s.args) : []
+      args: s.args ? JSON.parse(s.args) : [],
     }));
 }
 
 export function getMcpServer(id, uid) {
-  const s = db.prepare("SELECT * FROM mcp_servers WHERE id = ? AND uid = ?").get(id, uid);
+  const s = db
+    .prepare("SELECT * FROM mcp_servers WHERE id = ? AND uid = ?")
+    .get(id, uid);
   if (s) {
     s.args = s.args ? JSON.parse(s.args) : [];
   }
   return s;
 }
 
-export function createMcpServer(uid, name, type, command, args, url, isEnabled = 1) {
-  const result = db.prepare(`
+export function createMcpServer(
+  uid,
+  name,
+  type,
+  command,
+  args,
+  url,
+  isEnabled = 1
+) {
+  const result = db
+    .prepare(
+      `
     INSERT INTO mcp_servers (uid, name, type, command, args, url, is_enabled)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(uid, name, type, command || null, args ? JSON.stringify(args) : '[]', url || null, isEnabled);
+  `
+    )
+    .run(
+      uid,
+      name,
+      type,
+      command || null,
+      args ? JSON.stringify(args) : "[]",
+      url || null,
+      isEnabled
+    );
 
-  return { id: result.lastInsertRowid, uid, name, type, command, args: args || [], url, is_enabled: isEnabled };
+  return {
+    id: result.lastInsertRowid,
+    uid,
+    name,
+    type,
+    command,
+    args: args || [],
+    url,
+    is_enabled: isEnabled,
+  };
 }
 
 export function updateMcpServer(id, uid, updates) {
@@ -884,16 +917,29 @@ export function updateMcpServer(id, uid, updates) {
 
   const name = updates.name !== undefined ? updates.name : current.name;
   const type = updates.type !== undefined ? updates.type : current.type;
-  const command = updates.command !== undefined ? updates.command : current.command;
+  const command =
+    updates.command !== undefined ? updates.command : current.command;
   const args = updates.args !== undefined ? updates.args : current.args;
   const url = updates.url !== undefined ? updates.url : current.url;
-  const isEnabled = updates.is_enabled !== undefined ? updates.is_enabled : current.is_enabled;
+  const isEnabled =
+    updates.is_enabled !== undefined ? updates.is_enabled : current.is_enabled;
 
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE mcp_servers 
     SET name = ?, type = ?, command = ?, args = ?, url = ?, is_enabled = ?
     WHERE id = ? AND uid = ?
-  `).run(name, type, command || null, JSON.stringify(args || []), url || null, isEnabled ? 1 : 0, id, uid);
+  `
+  ).run(
+    name,
+    type,
+    command || null,
+    JSON.stringify(args || []),
+    url || null,
+    isEnabled ? 1 : 0,
+    id,
+    uid
+  );
 }
 
 export function deleteMcpServer(id, uid) {

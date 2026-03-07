@@ -8,6 +8,7 @@ import {
   deleteConversation,
   getAvailableModels,
   getConversations,
+  getEndpoints,
   getMessages,
   summarizeConversationTitle,
   updateConversation,
@@ -41,10 +42,10 @@ import {
   Drawer,
   Input,
   Layout,
-  Popover,
-  Slider,
   Popconfirm,
+  Popover,
   Select,
+  Slider,
   Tooltip,
   Upload,
   message as antdMessage,
@@ -73,6 +74,9 @@ const getStoredNumber = (key: string, fallback: number): number => {
 const getStoredString = (key: string): string => {
   return localStorage.getItem(key) || "";
 };
+
+const getModelStorageKey = (endpointId: number | null) =>
+  endpointId ? `timo.selected_model.${endpointId}` : "";
 
 // 将图片文件转为 base64
 const fileToBase64 = (file: File): Promise<string> =>
@@ -132,8 +136,9 @@ export default () => {
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<API.Message[]>([]);
   const [models, setModels] = useState<API.Model[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>(() =>
-    getStoredString("timo.selected_model")
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [defaultEndpointId, setDefaultEndpointId] = useState<number | null>(
+    null
   );
 
   // 输入状态
@@ -212,12 +217,15 @@ export default () => {
   }, [temperature, topP, maxTokens]);
 
   useEffect(() => {
+    const storageKey = getModelStorageKey(defaultEndpointId);
+    if (!storageKey) return;
+
     if (selectedModel) {
-      localStorage.setItem("timo.selected_model", selectedModel);
+      localStorage.setItem(storageKey, selectedModel);
     } else {
-      localStorage.removeItem("timo.selected_model");
+      localStorage.removeItem(storageKey);
     }
-  }, [selectedModel]);
+  }, [defaultEndpointId, selectedModel]);
 
   // 登录检查 & 初始化
   useEffect(() => {
@@ -242,13 +250,28 @@ export default () => {
 
   const loadInitData = async () => {
     try {
-      const [convs, availableModels] = await Promise.all([
+      const [convs, availableModels, endpoints] = await Promise.all([
         getConversations(),
         getAvailableModels(),
+        getEndpoints(),
       ]);
+      const defaultEndpoint =
+        endpoints.find((endpoint) => !!endpoint.is_default) || null;
+      const nextDefaultEndpointId = defaultEndpoint?.id ?? null;
+      const storedModel = getStoredString(
+        getModelStorageKey(nextDefaultEndpointId)
+      );
+
       setConversations(convs);
       setModels(availableModels);
+      setDefaultEndpointId(nextDefaultEndpointId);
       setSelectedModel((prev) => {
+        if (
+          storedModel &&
+          availableModels.some((m) => m.model_id === storedModel)
+        ) {
+          return storedModel;
+        }
         if (prev && availableModels.some((m) => m.model_id === prev)) {
           return prev;
         }
@@ -356,25 +379,28 @@ export default () => {
     return assistantIndex;
   }, []);
 
-  const replaceAssistantMessage = useCallback((index: number | null, content: string) => {
-    if (index === null || !content) return;
-    streamBufferRef.current = "";
-    streamErrorRef.current = null;
-    if (streamFlushTimerRef.current !== null) {
-      window.clearTimeout(streamFlushTimerRef.current);
-      streamFlushTimerRef.current = null;
-    }
+  const replaceAssistantMessage = useCallback(
+    (index: number | null, content: string) => {
+      if (index === null || !content) return;
+      streamBufferRef.current = "";
+      streamErrorRef.current = null;
+      if (streamFlushTimerRef.current !== null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
 
-    setMessages((prev) => {
-      if (!prev[index]) return prev;
-      const next = [...prev];
-      const target = next[index];
-      if (!target || target.role !== "assistant") return prev;
-      next[index] = { ...target, content };
-      return next;
-    });
-    setStreamRenderTick((tick) => tick + 1);
-  }, []);
+      setMessages((prev) => {
+        if (!prev[index]) return prev;
+        const next = [...prev];
+        const target = next[index];
+        if (!target || target.role !== "assistant") return prev;
+        next[index] = { ...target, content };
+        return next;
+      });
+      setStreamRenderTick((tick) => tick + 1);
+    },
+    []
+  );
 
   const processSseChunk = useCallback(
     (
@@ -700,7 +726,11 @@ export default () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ content, model: selectedModel, ...generationConfig }),
+        body: JSON.stringify({
+          content,
+          model: selectedModel,
+          ...generationConfig,
+        }),
         signal: controller.signal,
       });
 
@@ -806,7 +836,7 @@ export default () => {
     setPendingImages((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const filteredConversations = conversations.filter(c =>
+  const filteredConversations = conversations.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const modelOptions = models.map((model) => ({
@@ -830,11 +860,11 @@ export default () => {
         </Button>
 
         <div className="conv-list">
-          <div className="conv-list-header" style={{ padding: '0 8px 12px' }}>
+          <div className="conv-list-header" style={{ padding: "0 8px 12px" }}>
             <Input.Search
               placeholder="搜索对话..."
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={(e) => setSearchQuery(e.target.value)}
               allowClear
               size="small"
             />
@@ -842,8 +872,9 @@ export default () => {
           {filteredConversations.map((conv) => (
             <div
               key={conv.id}
-              className={`conversation-item ${currentConvId === conv.id ? "active" : ""
-                }`}
+              className={`conversation-item ${
+                currentConvId === conv.id ? "active" : ""
+              }`}
               onClick={() => handleSelectConversation(conv.id)}
             >
               {editingTitleId === conv.id ? (
@@ -1071,15 +1102,30 @@ export default () => {
                               <Input.TextArea
                                 autoSize={{ minRows: 2, maxRows: 10 }}
                                 value={editingMsgContent}
-                                onChange={(e) => setEditingMsgContent(e.target.value)}
+                                onChange={(e) =>
+                                  setEditingMsgContent(e.target.value)
+                                }
                                 className="edit-message-input"
                                 disabled={loading}
                               />
-                              <div className="edit-message-actions" style={{ marginTop: 8, textAlign: 'right' }}>
-                                <Button size="small" onClick={() => setEditingMsgId(null)} disabled={loading} style={{ marginRight: 8 }}>
+                              <div
+                                className="edit-message-actions"
+                                style={{ marginTop: 8, textAlign: "right" }}
+                              >
+                                <Button
+                                  size="small"
+                                  onClick={() => setEditingMsgId(null)}
+                                  disabled={loading}
+                                  style={{ marginRight: 8 }}
+                                >
                                   取消
                                 </Button>
-                                <Button size="small" type="primary" onClick={() => handleSaveEdit(msg.id!)} loading={loading}>
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  onClick={() => handleSaveEdit(msg.id!)}
+                                  loading={loading}
+                                >
                                   发送 / 重新生成
                                 </Button>
                               </div>
@@ -1104,7 +1150,9 @@ export default () => {
                                   : `static-${idx}`
                               }
                               className="stream-fade-shell"
-                              data-streaming={loading && idx === lastAssistantIdx}
+                              data-streaming={
+                                loading && idx === lastAssistantIdx
+                              }
                             >
                               <MarkdownRenderer
                                 content={msg.content}
@@ -1143,7 +1191,9 @@ export default () => {
                             icon={<EditOutlined />}
                             onClick={() => {
                               setEditingMsgId(msg.id!);
-                              setEditingMsgContent(extractDisplayContent(msg.content));
+                              setEditingMsgContent(
+                                extractDisplayContent(msg.content)
+                              );
                             }}
                             className="msg-action-btn"
                           />
@@ -1231,8 +1281,9 @@ export default () => {
                     options={modelOptions}
                     showSearch
                     filterOption={(input, option) =>
-                      String(option?.searchText || "")
-                        .includes(input.trim().toLowerCase())
+                      String(option?.searchText || "").includes(
+                        input.trim().toLowerCase()
+                      )
                     }
                     popupMatchSelectWidth={460}
                     bordered={false}
@@ -1249,16 +1300,40 @@ export default () => {
                   content={
                     <div className="generation-config">
                       <div className="generation-item">
-                        <div className="generation-label">Temperature: {temperature.toFixed(2)}</div>
-                        <Slider min={0} max={2} step={0.01} value={temperature} onChange={setTemperature} />
+                        <div className="generation-label">
+                          Temperature: {temperature.toFixed(2)}
+                        </div>
+                        <Slider
+                          min={0}
+                          max={2}
+                          step={0.01}
+                          value={temperature}
+                          onChange={setTemperature}
+                        />
                       </div>
                       <div className="generation-item">
-                        <div className="generation-label">Top P: {topP.toFixed(2)}</div>
-                        <Slider min={0} max={1} step={0.01} value={topP} onChange={setTopP} />
+                        <div className="generation-label">
+                          Top P: {topP.toFixed(2)}
+                        </div>
+                        <Slider
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={topP}
+                          onChange={setTopP}
+                        />
                       </div>
                       <div className="generation-item">
-                        <div className="generation-label">Max Tokens: {Math.round(maxTokens)}</div>
-                        <Slider min={256} max={8192} step={64} value={maxTokens} onChange={setMaxTokens} />
+                        <div className="generation-label">
+                          Max Tokens: {Math.round(maxTokens)}
+                        </div>
+                        <Slider
+                          min={256}
+                          max={8192}
+                          step={64}
+                          value={maxTokens}
+                          onChange={setMaxTokens}
+                        />
                       </div>
                     </div>
                   }
@@ -1301,7 +1376,13 @@ export default () => {
           </Content>
         </Layout>
 
-        <SettingsModal open={showSettings} onOpenChange={setShowSettings} />
+        <SettingsModal
+          open={showSettings}
+          onOpenChange={(v) => {
+            setShowSettings(v);
+            if (!v) loadInitData();
+          }}
+        />
         <SystemPromptModal
           open={showSystemPrompt}
           onClose={() => setShowSystemPrompt(false)}

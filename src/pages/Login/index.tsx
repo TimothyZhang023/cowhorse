@@ -1,8 +1,8 @@
 import { login, register } from "@/services/api";
-import { LockOutlined, UserOutlined, BulbOutlined } from "@ant-design/icons";
+import { BulbOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { ProForm, ProFormText } from "@ant-design/pro-components";
 import { history, useModel } from "@umijs/max";
-import { message, Tabs, ConfigProvider } from "antd";
+import { ConfigProvider, message, Tabs } from "antd";
 import { useEffect, useState } from "react";
 
 export default () => {
@@ -54,13 +54,15 @@ export default () => {
         token: {
           colorPrimary: "#4f46e5",
           borderRadius: 12,
-          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+          fontFamily:
+            "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
         },
       }}
     >
       <div
         style={{
-          background: "linear-gradient(135deg, #e0e7ff 0%, #ede9fe 50%, #f3e8ff 100%)",
+          background:
+            "linear-gradient(135deg, #e0e7ff 0%, #ede9fe 50%, #f3e8ff 100%)",
           minHeight: "100vh",
           display: "flex",
           justifyContent: "center",
@@ -70,9 +72,49 @@ export default () => {
         }}
       >
         {/* Soft floating background blobs */}
-        <div className="blob-float" style={{ position: "absolute", top: "-10%", left: "-10%", width: "40vw", height: "40vw", background: "linear-gradient(135deg, #a78bfa, #818cf8)", borderRadius: "50%", filter: "blur(100px)", opacity: 0.6 }} />
-        <div className="blob-float-delayed" style={{ position: "absolute", bottom: "-10%", right: "-10%", width: "40vw", height: "40vw", background: "linear-gradient(135deg, #c084fc, #e879f9)", borderRadius: "50%", filter: "blur(100px)", opacity: 0.6 }} />
-        <div className="blob-float" style={{ position: "absolute", top: "40%", left: "60%", width: "30vw", height: "30vw", background: "linear-gradient(135deg, #60a5fa, #3b82f6)", borderRadius: "50%", filter: "blur(100px)", opacity: 0.4, animationDelay: "-5s" }} />
+        <div
+          className="blob-float"
+          style={{
+            position: "absolute",
+            top: "-10%",
+            left: "-10%",
+            width: "40vw",
+            height: "40vw",
+            background: "linear-gradient(135deg, #a78bfa, #818cf8)",
+            borderRadius: "50%",
+            filter: "blur(100px)",
+            opacity: 0.6,
+          }}
+        />
+        <div
+          className="blob-float-delayed"
+          style={{
+            position: "absolute",
+            bottom: "-10%",
+            right: "-10%",
+            width: "40vw",
+            height: "40vw",
+            background: "linear-gradient(135deg, #c084fc, #e879f9)",
+            borderRadius: "50%",
+            filter: "blur(100px)",
+            opacity: 0.6,
+          }}
+        />
+        <div
+          className="blob-float"
+          style={{
+            position: "absolute",
+            top: "40%",
+            left: "60%",
+            width: "30vw",
+            height: "30vw",
+            background: "linear-gradient(135deg, #60a5fa, #3b82f6)",
+            borderRadius: "50%",
+            filter: "blur(100px)",
+            opacity: 0.4,
+            animationDelay: "-5s",
+          }}
+        />
 
         <div
           style={{
@@ -84,32 +126,67 @@ export default () => {
             backdropFilter: "blur(20px)",
             WebkitBackdropFilter: "blur(20px)",
             borderRadius: "24px",
-            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0,0,0,0.1)",
+            boxShadow:
+              "0 25px 50px -12px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0,0,0,0.1)",
             padding: "40px 32px",
             border: "1px solid rgba(255,255,255,0.8)",
           }}
         >
           <div style={{ textAlign: "center", marginBottom: 32 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 56, height: 56, borderRadius: 16, background: "linear-gradient(135deg, #4f46e5, #8b5cf6)", color: "white", fontSize: 28, marginBottom: 16, boxShadow: "0 10px 15px -3px rgba(79, 70, 229, 0.3)" }}>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 56,
+                height: 56,
+                borderRadius: 16,
+                background: "linear-gradient(135deg, #4f46e5, #8b5cf6)",
+                color: "white",
+                fontSize: 28,
+                marginBottom: 16,
+                boxShadow: "0 10px 15px -3px rgba(79, 70, 229, 0.3)",
+              }}
+            >
               <BulbOutlined />
             </div>
-            <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: "#1e1b4b", letterSpacing: "-0.5px" }}>Gemini Chat</h1>
-            <p style={{ marginTop: 8, color: "#6b7280", fontSize: 14 }}>A premium AI conversation experience</p>
+            <h1
+              style={{
+                fontSize: 28,
+                fontWeight: 700,
+                margin: 0,
+                color: "#1e1b4b",
+                letterSpacing: "-0.5px",
+              }}
+            >
+              Gemini Chat
+            </h1>
+            <p style={{ marginTop: 8, color: "#6b7280", fontSize: 14 }}>
+              A premium AI conversation experience
+            </p>
           </div>
 
           <ProForm
             submitter={{
               render: (_, dom) => (
-                <div style={{ display: "flex", width: "100%" }}>
-                  {dom[1]}
-                </div>
+                <div style={{ display: "flex", width: "100%" }}>{dom[1]}</div>
               ),
               searchConfig: {
                 submitText: type === "login" ? "进入系统" : "立即注册",
               },
               submitButtonProps: {
                 size: "large",
-                style: { width: "100%", borderRadius: 12, height: 48, fontSize: 16, fontWeight: 600, marginTop: 8, background: "linear-gradient(135deg, #4f46e5, #8b5cf6)", border: "none", color: "white" },
+                style: {
+                  width: "100%",
+                  borderRadius: 12,
+                  height: 48,
+                  fontSize: 16,
+                  fontWeight: 600,
+                  marginTop: 8,
+                  background: "linear-gradient(135deg, #4f46e5, #8b5cf6)",
+                  border: "none",
+                  color: "white",
+                },
               },
             }}
             onFinish={async (values) => {
@@ -124,11 +201,15 @@ export default () => {
               items={[
                 {
                   key: "login",
-                  label: <span style={{ fontSize: 16, fontWeight: 500 }}>登录</span>,
+                  label: (
+                    <span style={{ fontSize: 16, fontWeight: 500 }}>登录</span>
+                  ),
                 },
                 {
                   key: "register",
-                  label: <span style={{ fontSize: 16, fontWeight: 500 }}>注册</span>,
+                  label: (
+                    <span style={{ fontSize: 16, fontWeight: 500 }}>注册</span>
+                  ),
                 },
               ]}
             />
@@ -170,7 +251,9 @@ export default () => {
                 fieldProps={{
                   size: "large",
                   style: { borderRadius: 12 },
-                  prefix: <LockOutlined style={{ color: "rgba(0,0,0,0.25)" }} />,
+                  prefix: (
+                    <LockOutlined style={{ color: "rgba(0,0,0,0.25)" }} />
+                  ),
                 }}
                 placeholder={"请再次输入密码"}
                 rules={[

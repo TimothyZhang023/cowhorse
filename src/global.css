@@ -6,9 +6,15 @@
 
 /* Floating blobs animation */
 @keyframes float {
-  0% { transform: translateY(0px) scale(1); }
-  50% { transform: translateY(-30px) scale(1.05); }
-  100% { transform: translateY(0px) scale(1); }
+  0% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-30px) scale(1.05);
+  }
+  100% {
+    transform: translateY(0px) scale(1);
+  }
 }
 .blob-float {
   animation: float 10s ease-in-out infinite;

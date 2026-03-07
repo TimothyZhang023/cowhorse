@@ -68,7 +68,12 @@ export async function regenerateMessage(conversationId: string, model: string) {
   });
 }
 
-export async function editMessage(conversationId: string, msgId: number, content: string, model: string) {
+export async function editMessage(
+  conversationId: string,
+  msgId: number,
+  content: string,
+  model: string
+) {
   return request(`/api/conversations/${conversationId}/messages/${msgId}`, {
     method: "PUT",
     data: { content, model },

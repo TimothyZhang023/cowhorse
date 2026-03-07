@@ -131,10 +131,7 @@ export const SettingsModal = ({
       >
         <h3>API Endpoints</h3>
         <Space>
-          <Button
-            type="default"
-            onClick={() => setShowMcpModal(true)}
-          >
+          <Button type="default" onClick={() => setShowMcpModal(true)}>
             MCP / 工具插件
           </Button>
           <Button
@@ -335,6 +332,6 @@ export const SettingsModal = ({
       </Modal>
 
       <McpModal open={showMcpModal} onOpenChange={setShowMcpModal} />
-    </ModalForm >
+    </ModalForm>
   );
 };

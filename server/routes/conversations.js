@@ -1,7 +1,7 @@
 import { Router } from "express";
 import OpenAI from "openai";
 import { authMiddleware } from "../middleware/auth.js";
-import {
+import db, {
   addMessage,
   createConversation,
   deleteConversation,
@@ -15,7 +15,6 @@ import {
   updateConversationTitle,
   updateMessage,
 } from "../models/database.js";
-import db from "../models/database.js";
 import { executeMcpTool, getAllAvailableTools } from "../models/mcpManager.js";
 import { logger } from "../utils/logger.js";
 
@@ -83,14 +82,26 @@ function buildMessages(history, systemPrompt) {
     result.push({ role: "system", content: systemPrompt.trim() });
   }
   for (const m of history) {
-    if (m.role === "assistant" && m.content && m.content.startsWith("[TOOL_CALLS]:")) {
+    if (
+      m.role === "assistant" &&
+      m.content &&
+      m.content.startsWith("[TOOL_CALLS]:")
+    ) {
       try {
         const toolCalls = JSON.parse(m.content.slice(13));
-        result.push({ role: "assistant", content: null, tool_calls: toolCalls });
+        result.push({
+          role: "assistant",
+          content: null,
+          tool_calls: toolCalls,
+        });
       } catch (e) {
         console.warn("Failed to parse tool calls from history", e);
       }
-    } else if (m.role === "tool" && m.content && m.content.startsWith("[TOOL_RESULT:")) {
+    } else if (
+      m.role === "tool" &&
+      m.content &&
+      m.content.startsWith("[TOOL_RESULT:")
+    ) {
       const match = m.content.match(/^\[TOOL_RESULT:([^:]+):([^\]]+)\]:(.*)$/s);
       if (match) {
         result.push({
@@ -110,10 +121,15 @@ function buildMessages(history, systemPrompt) {
       const imageRegex2 = /\[IMAGE_DATA:([^\]]+)\]/g;
       while ((match = imageRegex2.exec(m.content)) !== null) {
         const base64Data = match[1];
-        const mimeType = base64Data.startsWith("/9j/") ? "image/jpeg" : "image/png";
+        const mimeType = base64Data.startsWith("/9j/")
+          ? "image/jpeg"
+          : "image/png";
         parts.push({
           type: "image_url",
-          image_url: { url: `data:${mimeType};base64,${base64Data}`, detail: "auto" },
+          image_url: {
+            url: `data:${mimeType};base64,${base64Data}`,
+            detail: "auto",
+          },
         });
       }
       result.push({ role: "user", content: parts });
@@ -244,7 +260,8 @@ function getUpstreamErrorMessage(error) {
     error?.cause?.message;
 
   const rawMessage = bodyMessage || error?.message || "上游服务请求失败";
-  const status = error?.status || error?.response?.status || error?.cause?.status;
+  const status =
+    error?.status || error?.response?.status || error?.cause?.status;
 
   return status ? `[${status}] ${rawMessage}` : rawMessage;
 }
@@ -294,7 +311,9 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
 
   if (!endpoints.length) {
     requestLog.warn("No API endpoints configured");
-    res.write(`data: ${JSON.stringify({ error: "请先在设置中配置 API Endpoint" })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ error: "请先在设置中配置 API Endpoint" })}\n\n`
+    );
     res.write("data: [DONE]\n\n");
     res.end();
     return false;
@@ -306,16 +325,19 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
     return [];
   });
   // Strip internal _mcp_server_id field before sending to OpenAI
-  const requestTools = allTools.length > 0
-    ? allTools.map(({ _mcp_server_id, ...t }) => t)
-    : undefined;
+  const requestTools =
+    allTools.length > 0
+      ? allTools.map(({ _mcp_server_id, ...t }) => t)
+      : undefined;
 
   let maxToolLoops = 5;
   let currentLoop = 0;
 
   async function executeTurn(currentMessages, currentAiMsgId) {
     if (currentLoop >= maxToolLoops) {
-      res.write(`data: ${JSON.stringify({ error: "超出最大工具调用次数" })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ error: "超出最大工具调用次数" })}\n\n`
+      );
       return false;
     }
     currentLoop++;
@@ -392,7 +414,9 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
                 );
               }
               fullTextContent += delta.content;
-              res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
+              res.write(
+                `data: ${JSON.stringify({ content: delta.content })}\n\n`
+              );
             }
 
             if (delta.tool_calls) {
@@ -402,11 +426,15 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
                   toolCalls[idx] = {
                     id: tcDelta.id,
                     type: "function",
-                    function: { name: tcDelta.function?.name || "", arguments: "" },
+                    function: {
+                      name: tcDelta.function?.name || "",
+                      arguments: "",
+                    },
                   };
                 }
                 if (tcDelta.function?.arguments) {
-                  toolCalls[idx].function.arguments += tcDelta.function.arguments;
+                  toolCalls[idx].function.arguments +=
+                    tcDelta.function.arguments;
                 }
               }
             }
@@ -457,7 +485,9 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
           }
 
           // CASE 2: Tool calls
-          const toolCallsMsgStr = `[TOOL_CALLS]:${JSON.stringify(finalToolCalls)}`;
+          const toolCallsMsgStr = `[TOOL_CALLS]:${JSON.stringify(
+            finalToolCalls
+          )}`;
           updateMessage(currentAiMsgId, uid, toolCallsMsgStr);
 
           currentMessages.push({
@@ -472,13 +502,27 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               const funcName = tc.function.name;
               const funcArgsDecoded = JSON.parse(tc.function.arguments || "{}");
 
-              res.write(`data: ${JSON.stringify({ type: "tool_running", tool_name: funcName })}\n\n`);
+              res.write(
+                `data: ${JSON.stringify({
+                  type: "tool_running",
+                  tool_name: funcName,
+                })}\n\n`
+              );
 
               let resultContent = "";
-              const toolDef = allTools.find((t) => t.function.name === funcName);
+              const toolDef = allTools.find(
+                (t) => t.function.name === funcName
+              );
               if (toolDef && toolDef._mcp_server_id) {
-                const mcpRes = await executeMcpTool(uid, toolDef._mcp_server_id, funcName, funcArgsDecoded);
-                resultContent = (mcpRes.content || []).map((c) => c.text).join("\n");
+                const mcpRes = await executeMcpTool(
+                  uid,
+                  toolDef._mcp_server_id,
+                  funcName,
+                  funcArgsDecoded
+                );
+                resultContent = (mcpRes.content || [])
+                  .map((c) => c.text)
+                  .join("\n");
               } else {
                 resultContent = `Unknown tool: ${funcName}`;
               }
@@ -494,7 +538,12 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               });
             } catch (err) {
               requestLog.error(
-                { err, endpointName: ep.name, baseURL, toolName: tc.function.name },
+                {
+                  err,
+                  endpointName: ep.name,
+                  baseURL,
+                  toolName: tc.function.name,
+                },
                 "Tool execution failed"
               );
               const errStr = `[TOOL_RESULT:${tc.id}:${tc.function.name}]:Error - ${err.message}`;
@@ -509,7 +558,12 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
           }
 
           // Loop next response
-          const nextAiMsg = addMessage(opts.conversationId, uid, "assistant", "");
+          const nextAiMsg = addMessage(
+            opts.conversationId,
+            uid,
+            "assistant",
+            ""
+          );
           const nextContent = await executeTurn(currentMessages, nextAiMsg.id);
 
           if (nextContent !== false && nextContent !== "_HANDLED_INTERNALLY_") {
@@ -531,7 +585,9 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
       }
 
       if (endpoints.indexOf(ep) < endpoints.length - 1) {
-        res.write(`data: ${JSON.stringify({ notice: "切换到备用端点中..." })}\n\n`);
+        res.write(
+          `data: ${JSON.stringify({ notice: "切换到备用端点中..." })}\n\n`
+        );
       }
     }
 
@@ -708,7 +764,12 @@ router.post("/:id/regenerate", async (req, res) => {
     res.end();
   } catch (error) {
     logger.error(
-      { err: error, route: "conversations.regenerate", uid, conversationId: id },
+      {
+        err: error,
+        route: "conversations.regenerate",
+        uid,
+        conversationId: id,
+      },
       "Regenerate request failed before stream completion"
     );
     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
@@ -747,7 +808,11 @@ router.put("/:id/messages/:msgId", async (req, res) => {
       return;
     }
 
-    const m = db.prepare("SELECT * FROM messages WHERE id = ? AND conversation_id = ? AND uid = ?").get(msgId, id, uid);
+    const m = db
+      .prepare(
+        "SELECT * FROM messages WHERE id = ? AND conversation_id = ? AND uid = ?"
+      )
+      .get(msgId, id, uid);
     if (!m) {
       res.write(`data: ${JSON.stringify({ error: "消息不存在" })}\n\n`);
       res.end();
@@ -755,7 +820,9 @@ router.put("/:id/messages/:msgId", async (req, res) => {
     }
 
     // 截断该消息之后的所有消息
-    db.prepare("DELETE FROM messages WHERE conversation_id = ? AND uid = ? AND id > ?").run(id, uid, msgId);
+    db.prepare(
+      "DELETE FROM messages WHERE conversation_id = ? AND uid = ? AND id > ?"
+    ).run(id, uid, msgId);
 
     // 更新当前消息的内容
     updateMessage(msgId, uid, content);

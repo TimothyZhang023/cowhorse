@@ -13,8 +13,8 @@ import adminRoutes from "./routes/admin.js";
 import authRoutes from "./routes/auth.js";
 import conversationRoutes from "./routes/conversations.js";
 import endpointRoutes from "./routes/endpoints.js";
-import proxyRoutes from "./routes/proxy.js";
 import mcpRoutes from "./routes/mcp.js";
+import proxyRoutes from "./routes/proxy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

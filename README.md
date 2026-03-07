@@ -74,7 +74,6 @@ npm start
 
 ---
 
-
 ### 数据库配置（SQLite / MySQL）
 
 默认使用 SQLite（无需额外配置）。如需切换 MySQL，请先安装 `mysql2`（例如 `npm i mysql2`），然后设置以下环境变量：

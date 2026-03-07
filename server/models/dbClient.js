@@ -58,7 +58,10 @@ function createMysqlClient() {
 
   const normalizeSql = (sql) =>
     sql
-      .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, "BIGINT PRIMARY KEY AUTO_INCREMENT")
+      .replace(
+        /INTEGER PRIMARY KEY AUTOINCREMENT/g,
+        "BIGINT PRIMARY KEY AUTO_INCREMENT"
+      )
       .replace(/\bDATETIME\b/g, "TIMESTAMP")
       .replace(/CREATE INDEX IF NOT EXISTS/gi, "CREATE INDEX")
       .replace(/\bBOOLEAN\b/g, "TINYINT(1)");

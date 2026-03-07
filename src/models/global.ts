@@ -23,8 +23,10 @@ type GlobalModel = {
 };
 
 export default (): GlobalModel => {
-  const { initialState, setInitialState } =
-    useModel("@@initialState", (state) => state) as InitialStateModel;
+  const { initialState, setInitialState } = useModel(
+    "@@initialState",
+    (state) => state
+  ) as InitialStateModel;
 
   // Derive state from initialState to ensure sync
   // app.tsx handles the initial fetch of currentUser
