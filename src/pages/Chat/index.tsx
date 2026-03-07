@@ -321,7 +321,7 @@ export default () => {
     const bufferedContent = streamBufferRef.current;
     const bufferedError = streamErrorRef.current;
 
-    if (targetIndex === null && !bufferedError) return;
+    if (targetIndex === null) return;
     if (!bufferedContent && !bufferedError) return;
 
     streamBufferRef.current = "";
@@ -366,17 +366,19 @@ export default () => {
     [scheduleStreamFlush]
   );
 
-  const createAssistantPlaceholder = useCallback(() => {
-    let assistantIndex = -1;
-    setMessages((prev) => {
-      assistantIndex = prev.length;
-      return [...prev, { role: "assistant", content: "" }];
-    });
-    streamTargetIndexRef.current = assistantIndex;
+  const createAssistantPlaceholder = useCallback(async () => {
     streamBufferRef.current = "";
     streamErrorRef.current = null;
     sseRemainderRef.current = "";
-    return assistantIndex;
+
+    await new Promise<void>((resolve) => {
+      setMessages((prev) => {
+        const nextIndex = prev.length;
+        streamTargetIndexRef.current = nextIndex;
+        resolve();
+        return [...prev, { role: "assistant", content: "" }];
+      });
+    });
   }, []);
 
   const replaceAssistantMessage = useCallback(
@@ -524,12 +526,11 @@ export default () => {
     setLoading(true);
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    let assistantIndex: number | null = null;
     let sawAssistantContent = false;
     let sawAssistantError = false;
 
     try {
-      assistantIndex = createAssistantPlaceholder();
+      await createAssistantPlaceholder();
       const token = localStorage.getItem("token");
       const url = isRegenerate
         ? `/api/conversations/${convId}/regenerate`
@@ -564,7 +565,10 @@ export default () => {
 
       if (!response.ok) {
         const errorMessage = await getResponseErrorMessage(response);
-        replaceAssistantMessage(assistantIndex, `❌ ${errorMessage}`);
+        replaceAssistantMessage(
+          streamTargetIndexRef.current,
+          `❌ ${errorMessage}`
+        );
         throw new Error(errorMessage);
       }
 
@@ -592,7 +596,6 @@ export default () => {
                 streamTargetIndexRef.current = next.length - 1;
                 return next;
               });
-              assistantIndex = streamTargetIndexRef.current;
               sawAssistantContent = false;
               sawAssistantError = false;
             } else {
@@ -614,7 +617,7 @@ export default () => {
       flushStreamBuffer();
       if (!sawAssistantContent && !sawAssistantError) {
         replaceAssistantMessage(
-          assistantIndex,
+          streamTargetIndexRef.current,
           "⚠️ 上游返回空内容，未生成可展示的回复。"
         );
       }
@@ -622,7 +625,7 @@ export default () => {
       if (error.name !== "AbortError") {
         if (!sawAssistantError) {
           replaceAssistantMessage(
-            assistantIndex,
+            streamTargetIndexRef.current,
             `❌ ${error.message || "发送失败，请检查网络和 API 配置"}`
           );
         }
@@ -712,7 +715,7 @@ export default () => {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    let assistantIndex: number | null = null;
+    let initialAssistantIndex: number | null = null;
     let sawAssistantContent = false;
     let sawAssistantError = false;
 
@@ -725,7 +728,7 @@ export default () => {
       // 添加空 assistant 消息占位
       updatedMessages.push({ role: "assistant", content: "" });
       setMessages(updatedMessages);
-      assistantIndex = updatedMessages.length - 1;
+      initialAssistantIndex = updatedMessages.length - 1;
     }
 
     try {
@@ -748,14 +751,17 @@ export default () => {
 
       if (!response.ok) {
         const errorMessage = await getResponseErrorMessage(response);
-        replaceAssistantMessage(assistantIndex, `❌ ${errorMessage}`);
+        replaceAssistantMessage(
+          streamTargetIndexRef.current,
+          `❌ ${errorMessage}`
+        );
         throw new Error(errorMessage);
       }
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
 
-      streamTargetIndexRef.current = assistantIndex;
+      streamTargetIndexRef.current = initialAssistantIndex;
       streamBufferRef.current = "";
       streamErrorRef.current = null;
       sseRemainderRef.current = "";
@@ -781,7 +787,6 @@ export default () => {
                 streamTargetIndexRef.current = next.length - 1;
                 return next;
               });
-              assistantIndex = streamTargetIndexRef.current;
               sawAssistantContent = false;
               sawAssistantError = false;
             } else {
@@ -803,7 +808,7 @@ export default () => {
       flushStreamBuffer();
       if (!sawAssistantContent && !sawAssistantError) {
         replaceAssistantMessage(
-          assistantIndex,
+          streamTargetIndexRef.current,
           "⚠️ 上游返回空内容，未生成可展示的回复。"
         );
       }
@@ -811,7 +816,7 @@ export default () => {
       if (error.name !== "AbortError") {
         if (!sawAssistantError) {
           replaceAssistantMessage(
-            assistantIndex,
+            streamTargetIndexRef.current,
             `❌ ${error.message || "发送失败，请检查网络和 API 配置"}`
           );
         }
