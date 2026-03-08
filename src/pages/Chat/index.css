@@ -241,6 +241,41 @@
   color: #ef4444 !important;
 }
 
+.conversation-tool-config {
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.conversation-tool-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conversation-tool-config-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.conversation-tool-config-hint,
+.conversation-tool-config-warning {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.conversation-tool-config-warning {
+  color: #b45309;
+}
+
+.conversation-tool-select {
+  width: 100%;
+}
+
 .title-edit {
   display: flex;
   align-items: center;

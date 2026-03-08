@@ -21,6 +21,7 @@ declare namespace API {
     id: string;
     title: string;
     system_prompt?: string;
+    tool_names?: string[] | null;
     created_at?: string;
   };
 
@@ -31,6 +32,15 @@ declare namespace API {
     tool_calls?: any[];
     tool_call_id?: string;
     name?: string;
+  };
+
+  type McpTool = {
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, any>;
+    };
   };
 
   type Endpoint = {
@@ -59,6 +69,7 @@ declare namespace API {
     command?: string;
     args?: string[];
     url?: string;
+    env?: Record<string, string>;
     headers?: Record<string, string>;
     auth?: {
       type: "bearer" | "basic";
@@ -68,6 +79,60 @@ declare namespace API {
     };
     is_enabled: number;
     created_at?: string;
+  };
+
+  type McpGenerationRequest = {
+    requirement: string;
+    auto_create?: boolean;
+  };
+
+  type McpGenerationResult = {
+    draft: Partial<McpServer>;
+    server?: McpServer;
+    model?: string;
+    endpoint?: string;
+  };
+
+  type MarketMcpServer = {
+    name: string;
+    title?: string;
+    description?: string;
+    version?: string;
+    repository_url?: string;
+    website_url?: string;
+    transport?: string;
+    remote_url?: string;
+    package_identifier?: string;
+    package_registry?: string;
+    package_transport?: string;
+    requires_headers?: boolean;
+    remote_headers?: Array<Record<string, any>>;
+  };
+
+  type McpTestResult = {
+    success: boolean;
+    server_id: number;
+    server_name: string;
+    tool_count: number;
+    tool_names: string[];
+  };
+
+  type DefaultMcpTemplate = {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    type: string;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+    headers?: Record<string, string>;
+    auth?: McpServer["auth"] | null;
+    is_enabled: number;
+    needs_configuration?: boolean;
+    keywords?: string[];
+    source_url?: string;
   };
 
   type Skill = {
@@ -81,6 +146,18 @@ declare namespace API {
     updated_at?: string;
   };
 
+  type SkillGenerationRequest = {
+    requirement: string;
+    auto_create?: boolean;
+  };
+
+  type SkillGenerationResult = {
+    draft: Partial<Skill>;
+    skill?: Skill;
+    model?: string;
+    endpoint?: string;
+  };
+
   type AgentTask = {
     id: number;
     name: string;
@@ -91,6 +168,41 @@ declare namespace API {
     is_active: number;
     created_at?: string;
     updated_at?: string;
+  };
+
+  type AgentTaskGenerationRequest = {
+    requirement: string;
+    auto_create?: boolean;
+  };
+
+  type AgentTaskGenerationAnalysis = {
+    summary: string;
+    workflow_steps: string[];
+    capability_breakdown: string[];
+    search_queries: string[];
+    existing_skill_ids?: number[];
+  };
+
+  type AgentTaskGenerationMarketMcp = {
+    name: string;
+    title?: string;
+    transport?: string;
+    reason: string;
+    repository_url?: string;
+    remote_url?: string;
+    template_id?: string;
+  };
+
+  type AgentTaskGenerationResult = {
+    analysis: AgentTaskGenerationAnalysis;
+    draft: Partial<AgentTask>;
+    suggested_skills: Partial<Skill>[];
+    recommended_mcp_templates: DefaultMcpTemplate[];
+    market_mcp_recommendations: AgentTaskGenerationMarketMcp[];
+    created_skills?: Skill[];
+    task?: AgentTask;
+    model?: string;
+    endpoint?: string;
   };
 
   type TaskRun = {

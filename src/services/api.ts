@@ -50,13 +50,15 @@ export async function deleteConversation(id: string) {
 export async function updateConversation(
   id: string,
   title?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  toolNames?: string[] | null
 ) {
   return request(`/api/conversations/${id}`, {
     method: "PUT",
     data: {
       ...(title !== undefined && { title }),
       ...(systemPrompt !== undefined && { system_prompt: systemPrompt }),
+      ...(toolNames !== undefined && { tool_names: toolNames }),
     },
   });
 }
@@ -110,8 +112,21 @@ export async function getMcpServers() {
 }
 
 export async function getMcpTools() {
-  return request<any[]>("/api/mcp/tools", {
+  return request<API.McpTool[]>("/api/mcp/tools", {
     method: "GET",
+  });
+}
+
+export async function getDefaultMcpTemplates() {
+  return request<API.DefaultMcpTemplate[]>("/api/mcp/defaults", {
+    method: "GET",
+  });
+}
+
+export async function searchMarketMcp(query: string) {
+  return request<API.MarketMcpServer[]>("/api/mcp/market", {
+    method: "GET",
+    params: { query },
   });
 }
 
@@ -120,6 +135,35 @@ export async function createMcpServer(data: any) {
     method: "POST",
     data,
   });
+}
+
+export async function importDefaultMcpTemplate(templateId: string) {
+  return request<{ template: API.DefaultMcpTemplate; server: API.McpServer }>(
+    `/api/mcp/defaults/${templateId}/import`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export async function generateMcpDraft(data: API.McpGenerationRequest) {
+  return request<API.McpGenerationResult>("/api/mcp/generate", {
+    method: "POST",
+    data,
+  });
+}
+
+export async function generateDraftFromMarketMcp(data: {
+  server_name: string;
+  auto_create?: boolean;
+}) {
+  return request<{ draft: Partial<API.McpServer>; server?: API.McpServer }>(
+    "/api/mcp/market/generate",
+    {
+      method: "POST",
+      data,
+    }
+  );
 }
 
 export async function updateMcpServer(id: number, data: any) {
@@ -132,6 +176,12 @@ export async function updateMcpServer(id: number, data: any) {
 export async function deleteMcpServer(id: number) {
   return request(`/api/mcp/${id}`, {
     method: "DELETE",
+  });
+}
+
+export async function testMcpServerConnection(id: number) {
+  return request<API.McpTestResult>(`/api/mcp/${id}/test`, {
+    method: "POST",
   });
 }
 
@@ -228,6 +278,13 @@ export async function createSkill(data: Partial<API.Skill>) {
   });
 }
 
+export async function generateSkillDraft(data: API.SkillGenerationRequest) {
+  return request<API.SkillGenerationResult>("/api/skills/generate", {
+    method: "POST",
+    data,
+  });
+}
+
 export async function updateSkill(id: number, data: Partial<API.Skill>) {
   return request(`/api/skills/${id}`, {
     method: "PUT",
@@ -250,6 +307,13 @@ export async function getAgentTasks() {
 
 export async function createAgentTask(data: Partial<API.AgentTask>) {
   return request<API.AgentTask>("/api/agent-tasks", {
+    method: "POST",
+    data,
+  });
+}
+
+export async function generateAgentTask(data: API.AgentTaskGenerationRequest) {
+  return request<API.AgentTaskGenerationResult>("/api/agent-tasks/generate", {
     method: "POST",
     data,
   });

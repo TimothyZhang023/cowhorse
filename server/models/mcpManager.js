@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { listMcpServers } from "./database.js";
+import { getMcpServer, listMcpServers } from "./database.js";
 
 // Global map to hold connected MCP clients
 // key: string (e.g. `uid_serverId`), value: { client: Client, transport: Transport }
@@ -53,6 +53,11 @@ export async function getConnectedMcpClient(serverConfig) {
         // Stdio doesn't natively support headers/auth in the same way as SSE,
         // but we can inject them as environment variables if needed.
         const env = { ...process.env };
+        if (serverConfig.env) {
+          Object.entries(serverConfig.env).forEach(([k, v]) => {
+            env[k] = String(v ?? "");
+          });
+        }
         if (serverConfig.headers) {
           Object.entries(serverConfig.headers).forEach(([k, v]) => {
             env[k] = v;
@@ -204,5 +209,41 @@ export async function disconnectMcpServer(uid, serverId) {
       /* ignore */
     }
     mcpClients.delete(clientKey);
+  }
+}
+
+export async function testMcpServerConnection(uid, serverId, timeoutMs = 12000) {
+  const serverConfig = getMcpServer(serverId, uid);
+  if (!serverConfig) {
+    throw new Error(`MCP Server ${serverId} not found or access denied.`);
+  }
+
+  await disconnectMcpServer(uid, serverId);
+
+  const runTest = async () => {
+    const client = await getConnectedMcpClient(serverConfig);
+    const toolsResponse = await client.listTools();
+    const tools = Array.isArray(toolsResponse?.tools) ? toolsResponse.tools : [];
+
+    return {
+      success: true,
+      server_id: Number(serverId),
+      server_name: serverConfig.name,
+      tool_count: tools.length,
+      tool_names: tools.slice(0, 10).map((tool) => tool.name),
+    };
+  };
+
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      reject(new Error("测试连接超时，请检查命令、网络或认证配置"));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([runTest(), timeoutPromise]);
+  } catch (error) {
+    await disconnectMcpServer(uid, serverId).catch(() => {});
+    throw error;
   }
 }

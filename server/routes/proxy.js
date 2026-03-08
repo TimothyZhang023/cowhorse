@@ -25,6 +25,25 @@ import {
 
 const router = Router();
 
+export function resolveProxyMaxTokens(endpoint, requestedMaxTokens) {
+  const provider = String(endpoint?.provider || "").toLowerCase();
+  const parsed = Number(requestedMaxTokens);
+  const hasExplicitValue = Number.isFinite(parsed);
+
+  if (provider === "openrouter") {
+    if (!hasExplicitValue) {
+      return 16384;
+    }
+    return Math.round(Math.min(16384, Math.max(64, parsed)));
+  }
+
+  if (!hasExplicitValue) {
+    return undefined;
+  }
+
+  return Math.round(Math.max(1, parsed));
+}
+
 // API Key 鉴权中间件
 function proxyAuth(req, res, next) {
   const token = req.headers.authorization?.replace("Bearer ", "");
@@ -131,13 +150,16 @@ router.post("/chat/completions", async (req, res) => {
     for (const ep of endpoints) {
       try {
         const client = new OpenAI({ apiKey: ep.api_key, baseURL: ep.base_url });
+        const resolvedMaxTokens = resolveProxyMaxTokens(ep, max_tokens);
 
         const params = {
           model: model || "gpt-4",
           messages,
           stream,
           ...(temperature !== undefined && { temperature }),
-          ...(max_tokens !== undefined && { max_tokens }),
+          ...(resolvedMaxTokens !== undefined && {
+            max_tokens: resolvedMaxTokens,
+          }),
           ...(top_p !== undefined && { top_p }),
           ...(frequency_penalty !== undefined && { frequency_penalty }),
           ...(presence_penalty !== undefined && { presence_penalty }),

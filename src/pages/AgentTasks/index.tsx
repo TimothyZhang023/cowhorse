@@ -2,13 +2,17 @@ import { AccountModal } from "@/components/AccountModal";
 import { SettingsModal } from "@/components/SettingsModal";
 import { Sidebar } from "@/components/Sidebar";
 import {
+  createSkill,
   createAgentTask,
   deleteAgentTask,
+  generateAgentTask,
+  generateDraftFromMarketMcp,
   getAgentTasks,
   getAvailableModels,
   getMcpServers,
   getMcpTools,
   getSkills,
+  importDefaultMcpTemplate,
   getTaskRunEvents,
   getTaskRuns,
   runAgentTask,
@@ -20,10 +24,12 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   RobotOutlined,
+  ExperimentOutlined,
 } from "@ant-design/icons";
 import {
   ModalForm,
   ProFormSelect,
+  ProFormSwitch,
   ProFormText,
   ProFormTextArea,
   ProList,
@@ -111,6 +117,9 @@ export default () => {
   const [editingTask, setEditingTask] = useState<Partial<API.AgentTask> | null>(
     null
   );
+  const [generatorOpen, setGeneratorOpen] = useState(false);
+  const [generationResult, setGenerationResult] =
+    useState<API.AgentTaskGenerationResult | null>(null);
 
   const [skills, setSkills] = useState<API.Skill[]>([]);
   const [mcpServers, setMcpServers] = useState<API.McpServer[]>([]);
@@ -127,6 +136,11 @@ export default () => {
     []
   );
   const [runEventsLoading, setRunEventsLoading] = useState(false);
+  const [importingTemplateId, setImportingTemplateId] = useState<string | null>(
+    null
+  );
+  const [creatingSkillName, setCreatingSkillName] = useState<string | null>(null);
+  const [marketDraftingName, setMarketDraftingName] = useState<string | null>(null);
 
   const isDark = theme === "dark";
 
@@ -156,6 +170,82 @@ export default () => {
     loadData();
     loadRuns();
   }, []);
+
+  const handleImportTemplateFromSuggestions = async (templateId: string) => {
+    try {
+      setImportingTemplateId(templateId);
+      const result = await importDefaultMcpTemplate(templateId);
+      messageApi.success(
+        result.template.needs_configuration
+          ? "默认 MCP 已导入，请补充配置后启用"
+          : "默认 MCP 已导入"
+      );
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(
+        error?.response?.data?.error ||
+          error?.data?.error ||
+          error?.message ||
+          "导入默认 MCP 失败"
+      );
+    } finally {
+      setImportingTemplateId(null);
+    }
+  };
+
+  const handleCreateSuggestedSkill = async (skillDraft: Partial<API.Skill>) => {
+    try {
+      setCreatingSkillName(String(skillDraft.name || ""));
+      const created = await createSkill({
+        name: skillDraft.name,
+        description: skillDraft.description,
+        prompt: skillDraft.prompt,
+        tools: Array.isArray(skillDraft.tools) ? skillDraft.tools : [],
+      });
+      messageApi.success(`已创建技能 ${created.name}`);
+      await loadData();
+      setEditingTask((current) =>
+        current
+          ? {
+              ...current,
+              skill_ids: Array.from(
+                new Set([...(current.skill_ids || []), created.id])
+              ),
+            }
+          : current
+      );
+    } catch (error: any) {
+      messageApi.error(
+        error?.response?.data?.error ||
+          error?.data?.error ||
+          error?.message ||
+          "创建技能失败"
+      );
+    } finally {
+      setCreatingSkillName(null);
+    }
+  };
+
+  const handleImportMarketMcp = async (serverName: string) => {
+    try {
+      setMarketDraftingName(serverName);
+      await generateDraftFromMarketMcp({
+        server_name: serverName,
+        auto_create: true,
+      });
+      messageApi.success("市场 MCP 已导入");
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(
+        error?.response?.data?.error ||
+          error?.data?.error ||
+          error?.message ||
+          "导入市场 MCP 失败"
+      );
+    } finally {
+      setMarketDraftingName(null);
+    }
+  };
 
   const loadRuns = async () => {
     setRunsLoading(true);
@@ -282,15 +372,23 @@ export default () => {
                   <RobotOutlined style={{ fontSize: 20, color: "#3b82f6" }} />
                   <h3 style={{ margin: 0 }}>我的任务</h3>
                 </Space>
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  onClick={() =>
-                    setEditingTask({ skill_ids: [], tool_names: [] })
-                  }
-                >
-                  创建任务
-                </Button>
+                <Space>
+                  <Button
+                    icon={<ExperimentOutlined />}
+                    onClick={() => setGeneratorOpen(true)}
+                  >
+                    AI 生成
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() =>
+                      setEditingTask({ skill_ids: [], tool_names: [] })
+                    }
+                  >
+                    创建任务
+                  </Button>
+                </Space>
               </div>
 
               <ProList<API.AgentTask>
@@ -354,6 +452,239 @@ export default () => {
                 }}
               />
             </Card>
+
+            {generationResult && (
+              <Card className="cw-module-card" style={{ marginTop: 16 }}>
+                <div
+                  style={{
+                    marginBottom: 16,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <Space>
+                    <ExperimentOutlined
+                      style={{ fontSize: 18, color: "#8b5cf6" }}
+                    />
+                    <h3 style={{ margin: 0 }}>需求分析与建议</h3>
+                  </Space>
+                  <Typography.Text type="secondary">
+                    {generationResult.endpoint || "默认 Endpoint"} ·{" "}
+                    {generationResult.model || "默认模型"}
+                  </Typography.Text>
+                </div>
+
+                <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                  <Alert
+                    showIcon
+                    type="info"
+                    message={generationResult.analysis.summary || "已完成需求分析"}
+                    description={
+                      generationResult.task
+                        ? `已自动创建任务「${generationResult.task.name}」`
+                        : "已生成任务草稿，可继续调整后保存。"
+                    }
+                  />
+
+                  {generationResult.analysis.workflow_steps?.length ? (
+                    <div>
+                      <Typography.Text strong>工作流拆解</Typography.Text>
+                      <Timeline
+                        style={{ marginTop: 12 }}
+                        items={generationResult.analysis.workflow_steps.map(
+                          (step) => ({
+                            children: step,
+                          })
+                        )}
+                      />
+                    </div>
+                  ) : null}
+
+                  {generationResult.analysis.capability_breakdown?.length ? (
+                    <div>
+                      <Typography.Text strong>能力拆解</Typography.Text>
+                      <div style={{ marginTop: 8 }}>
+                        <Space wrap>
+                          {generationResult.analysis.capability_breakdown.map(
+                            (item) => (
+                              <Tag key={item} color="purple">
+                                {item}
+                              </Tag>
+                            )
+                          )}
+                        </Space>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {generationResult.suggested_skills?.length ? (
+                    <div>
+                      <Typography.Text strong>建议新增技能</Typography.Text>
+                      <ProList<Partial<API.Skill>>
+                        rowKey={(row) => String(row.name)}
+                        style={{ marginTop: 12 }}
+                        dataSource={generationResult.suggested_skills}
+                        metas={{
+                          title: {
+                            render: (_, row) => <b>{row.name}</b>,
+                          },
+                          description: {
+                            render: (_, row) => (
+                              <Space
+                                direction="vertical"
+                                style={{ width: "100%" }}
+                              >
+                                <Typography.Text>
+                                  {row.description || "-"}
+                                </Typography.Text>
+                                {row.tools?.length ? (
+                                  <Space wrap>
+                                    {row.tools.map((tool) => (
+                                      <Tag key={tool} color="orange">
+                                        {tool}
+                                      </Tag>
+                                    ))}
+                                  </Space>
+                                ) : null}
+                              </Space>
+                            ),
+                          },
+                          actions: {
+                            render: (_, row) => [
+                              <Button
+                                key="create"
+                                type="link"
+                                loading={creatingSkillName === row.name}
+                                onClick={() => handleCreateSuggestedSkill(row)}
+                              >
+                                导入为技能
+                              </Button>,
+                            ],
+                          },
+                        }}
+                      />
+                    </div>
+                  ) : null}
+
+                  {generationResult.recommended_mcp_templates?.length ? (
+                    <div>
+                      <Typography.Text strong>推荐导入的默认 MCP</Typography.Text>
+                      <ProList<API.DefaultMcpTemplate>
+                        rowKey="id"
+                        style={{ marginTop: 12 }}
+                        dataSource={generationResult.recommended_mcp_templates}
+                        metas={{
+                          title: {
+                            render: (_, row) => (
+                              <Space wrap>
+                                <b>{row.name}</b>
+                                <Tag color="blue">{row.category}</Tag>
+                                {row.needs_configuration ? (
+                                  <Tag color="orange">需配置</Tag>
+                                ) : (
+                                  <Tag color="success">可直接导入</Tag>
+                                )}
+                              </Space>
+                            ),
+                          },
+                          description: {
+                            dataIndex: "description",
+                          },
+                          actions: {
+                            render: (_, row) => [
+                              <Button
+                                key="import"
+                                type="link"
+                                loading={importingTemplateId === row.id}
+                                onClick={() =>
+                                  handleImportTemplateFromSuggestions(row.id)
+                                }
+                              >
+                                导入默认 MCP
+                              </Button>,
+                            ],
+                          },
+                        }}
+                      />
+                    </div>
+                  ) : null}
+
+                  {generationResult.market_mcp_recommendations?.length ? (
+                    <div>
+                      <Typography.Text strong>市场 MCP 检索结果</Typography.Text>
+                      <ProList<API.AgentTaskGenerationMarketMcp>
+                        rowKey={(row) => `${row.name}-${row.transport}`}
+                        style={{ marginTop: 12 }}
+                        dataSource={generationResult.market_mcp_recommendations}
+                        metas={{
+                          title: {
+                            render: (_, row) => (
+                              <Space wrap>
+                                <b>{row.title || row.name}</b>
+                                {row.transport ? (
+                                  <Tag color="geekblue">{row.transport}</Tag>
+                                ) : null}
+                                {row.template_id ? (
+                                  <Tag color="gold">有默认模板</Tag>
+                                ) : null}
+                              </Space>
+                            ),
+                          },
+                          description: {
+                            render: (_, row) => (
+                              <Space direction="vertical">
+                                <Typography.Text>{row.reason}</Typography.Text>
+                                {row.repository_url ? (
+                                  <Typography.Link
+                                    href={row.repository_url}
+                                    target="_blank"
+                                  >
+                                    仓库链接
+                                  </Typography.Link>
+                                ) : null}
+                              </Space>
+                            ),
+                          },
+                          actions: {
+                            render: (_, row) =>
+                              row.template_id
+                                ? [
+                                    <Button
+                                      key="import-template"
+                                      type="link"
+                                      loading={
+                                        importingTemplateId === row.template_id
+                                      }
+                                      onClick={() =>
+                                        handleImportTemplateFromSuggestions(
+                                          String(row.template_id)
+                                        )
+                                      }
+                                    >
+                                      导入对应默认模板
+                                    </Button>,
+                                  ]
+                                : [
+                                    <Button
+                                      key="import-market"
+                                      type="link"
+                                      loading={marketDraftingName === row.name}
+                                      onClick={() =>
+                                        handleImportMarketMcp(row.name)
+                                      }
+                                    >
+                                      直接导入市场 MCP
+                                    </Button>,
+                                  ],
+                          },
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </Space>
+              </Card>
+            )}
 
             <Card className="cw-module-card" style={{ marginTop: 16 }}>
               <div
@@ -505,6 +836,66 @@ export default () => {
             fieldProps={{
               mode: "multiple", // 改回 multiple，也可以保留 tags 但已有选项
             }}
+          />
+        </ModalForm>
+
+        <ModalForm
+          title="AI 生成任务编排"
+          open={generatorOpen}
+          onOpenChange={setGeneratorOpen}
+          modalProps={{ destroyOnHidden: true }}
+          initialValues={{ auto_create: false }}
+          onFinish={async (values) => {
+            try {
+              const result = await generateAgentTask({
+                requirement: String(values.requirement || "").trim(),
+                auto_create: Boolean(values.auto_create),
+              });
+
+              setGenerationResult(result);
+
+              if (result.task) {
+                messageApi.success(`已自动创建任务 ${result.task.name}`);
+                await loadData();
+                setGeneratorOpen(false);
+                return true;
+              }
+
+              setEditingTask({
+                ...(result.draft || {}),
+                skill_ids: Array.isArray(result.draft?.skill_ids)
+                  ? result.draft.skill_ids
+                  : [],
+                tool_names: Array.isArray(result.draft?.tool_names)
+                  ? result.draft.tool_names
+                  : [],
+              });
+              messageApi.success("已生成任务草稿");
+              setGeneratorOpen(false);
+              return true;
+            } catch (error: any) {
+              messageApi.error(
+                error?.response?.data?.error ||
+                  error?.data?.error ||
+                  error?.message ||
+                  "任务生成失败"
+              );
+              return false;
+            }
+          }}
+        >
+          <ProFormTextArea
+            name="requirement"
+            label="自然语言需求"
+            placeholder="例如：做一个技术调研 Agent，先理解需求，再拆解关键能力，研究市场上可用的 MCP，优先复用现有技能和工具，最后输出调研报告。"
+            rules={[{ required: true, message: "请输入任务需求" }]}
+            fieldProps={{ rows: 6 }}
+          />
+          <ProFormSwitch
+            name="auto_create"
+            label="生成后直接创建"
+            checkedChildren="直接创建"
+            unCheckedChildren="仅生成草稿"
           />
         </ModalForm>
 

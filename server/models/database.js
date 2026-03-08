@@ -34,6 +34,7 @@ db.exec(`
     uid TEXT NOT NULL,
     title TEXT NOT NULL,
     system_prompt TEXT DEFAULT '',
+    tool_names TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -132,6 +133,7 @@ db.exec(`
     command TEXT,
     args TEXT,
     url TEXT,
+    env TEXT,     -- JSON 对象：{"API_KEY": "..."}
     headers TEXT, -- JSON 对象：{"X-Custom": "value"}
     auth TEXT,    -- JSON 对象：{"type": "bearer", "token": "..."}
     is_enabled INTEGER DEFAULT 1,
@@ -286,6 +288,11 @@ try {
 } catch (e) {
   /* column already exists */
 }
+try {
+  db.prepare("ALTER TABLE mcp_servers ADD COLUMN env TEXT").run();
+} catch (e) {
+  /* column already exists */
+}
 
 try {
   db.prepare("ALTER TABLE agent_tasks ADD COLUMN model_id TEXT").run();
@@ -401,28 +408,70 @@ try {
   /* column already exists */
 }
 
+try {
+  db.prepare("ALTER TABLE conversations ADD COLUMN tool_names TEXT").run();
+} catch (e) {
+  /* column already exists */
+}
+
+function parseJsonArray(rawValue, fallbackValue = []) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return fallbackValue;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? parsed : fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+}
+
+function normalizeConversationRow(row) {
+  if (!row) return row;
+
+  return {
+    ...row,
+    tool_names:
+      row.tool_names === null || row.tool_names === undefined
+        ? null
+        : parseJsonArray(row.tool_names, []),
+  };
+}
+
 export function getConversations(uid) {
   return db
     .prepare(
       `
     SELECT id, title, system_prompt, created_at, updated_at
+         , tool_names
     FROM conversations
     WHERE uid = ?
     ORDER BY updated_at DESC
   `
     )
-    .all(uid);
+    .all(uid)
+    .map(normalizeConversationRow);
 }
 
-export function createConversation(uid, title = "新对话") {
+export function createConversation(uid, title = "新对话", toolNames = null) {
   const result = db
     .prepare(
       `
-    INSERT INTO conversations (uid, title) VALUES (?, ?)
+    INSERT INTO conversations (uid, title, tool_names) VALUES (?, ?, ?)
   `
     )
-    .run(uid, title);
-  return { id: result.lastInsertRowid, title, system_prompt: "" };
+    .run(
+      uid,
+      title,
+      Array.isArray(toolNames) ? JSON.stringify(toolNames) : null
+    );
+  return {
+    id: result.lastInsertRowid,
+    title,
+    system_prompt: "",
+    tool_names: Array.isArray(toolNames) ? toolNames : null,
+  };
 }
 
 export function updateConversationTitle(id, uid, title) {
@@ -439,6 +488,18 @@ export function updateConversationSystemPrompt(id, uid, systemPrompt) {
     UPDATE conversations SET system_prompt = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND uid = ?
   `
   ).run(systemPrompt, id, uid);
+}
+
+export function updateConversationToolNames(id, uid, toolNames) {
+  db.prepare(
+    `
+    UPDATE conversations SET tool_names = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND uid = ?
+  `
+  ).run(
+    Array.isArray(toolNames) ? JSON.stringify(toolNames) : null,
+    id,
+    uid
+  );
 }
 
 export function deleteConversation(id, uid) {
@@ -470,9 +531,12 @@ export function clearAllHistory(uid) {
 }
 
 export function getConversation(id, uid) {
-  return db
-    .prepare("SELECT * FROM conversations WHERE id = ? AND uid = ?")
-    .get(id, uid);
+  return normalizeConversationRow(
+    db.prepare("SELECT * FROM conversations WHERE id = ? AND uid = ?").get(
+      id,
+      uid
+    )
+  );
 }
 
 // ============ 消息管理 ============
@@ -982,6 +1046,7 @@ export function listMcpServers(uid) {
     .map((s) => ({
       ...s,
       args: s.args ? JSON.parse(s.args) : [],
+      env: s.env ? JSON.parse(s.env) : {},
       headers: s.headers ? JSON.parse(s.headers) : {},
       auth: s.auth ? JSON.parse(decrypt(s.auth)) : null,
     }));
@@ -993,6 +1058,7 @@ export function getMcpServer(id, uid) {
     .get(id, uid);
   if (s) {
     s.args = s.args ? JSON.parse(s.args) : [];
+    s.env = s.env ? JSON.parse(s.env) : {};
     s.headers = s.headers ? JSON.parse(s.headers) : {};
     s.auth = s.auth ? JSON.parse(decrypt(s.auth)) : null;
   }
@@ -1007,6 +1073,7 @@ export function createMcpServer(
   args,
   url,
   isEnabled = 1,
+  env = {},
   headers = {},
   auth = null
 ) {
@@ -1014,8 +1081,8 @@ export function createMcpServer(
   const result = db
     .prepare(
       `
-    INSERT INTO mcp_servers (uid, name, type, command, args, url, is_enabled, headers, auth)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO mcp_servers (uid, name, type, command, args, url, is_enabled, env, headers, auth)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `
     )
     .run(
@@ -1026,6 +1093,7 @@ export function createMcpServer(
       args ? JSON.stringify(args) : "[]",
       url || null,
       isEnabled,
+      JSON.stringify(env || {}),
       JSON.stringify(headers || {}),
       encryptedAuth
     );
@@ -1039,6 +1107,7 @@ export function createMcpServer(
     args: args || [],
     url,
     is_enabled: isEnabled,
+    env,
     headers,
     auth,
   };
@@ -1056,6 +1125,7 @@ export function updateMcpServer(id, uid, updates) {
   const url = updates.url !== undefined ? updates.url : current.url;
   const isEnabled =
     updates.is_enabled !== undefined ? updates.is_enabled : current.is_enabled;
+  const env = updates.env !== undefined ? updates.env : current.env;
   const headers =
     updates.headers !== undefined ? updates.headers : current.headers;
   const auth = updates.auth !== undefined ? updates.auth : current.auth;
@@ -1069,7 +1139,7 @@ export function updateMcpServer(id, uid, updates) {
   db.prepare(
     `
     UPDATE mcp_servers 
-    SET name = ?, type = ?, command = ?, args = ?, url = ?, is_enabled = ?, headers = ?, auth = ?
+    SET name = ?, type = ?, command = ?, args = ?, url = ?, is_enabled = ?, env = ?, headers = ?, auth = ?
     WHERE id = ? AND uid = ?
   `
   ).run(
@@ -1079,6 +1149,7 @@ export function updateMcpServer(id, uid, updates) {
     JSON.stringify(args || []),
     url || null,
     isEnabled ? 1 : 0,
+    JSON.stringify(env || {}),
     JSON.stringify(headers || {}),
     encryptedAuth,
     id,

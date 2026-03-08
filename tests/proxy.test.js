@@ -1,6 +1,7 @@
 import request from "supertest";
 import { createApp } from "../server/app.js";
 import { createApiKey, createUser } from "../server/models/database.js";
+import { resolveProxyMaxTokens } from "../server/routes/proxy.js";
 
 describe("Proxy API (/v1)", () => {
   let app;
@@ -53,5 +54,14 @@ describe("Proxy API (/v1)", () => {
       });
     expect(res.statusCode).toBe(400);
     expect(res.body.error.message).toContain("配置 API Endpoint");
+  });
+
+  it("caps OpenRouter proxy max_tokens to a safer ceiling", () => {
+    expect(
+      resolveProxyMaxTokens({ provider: "openrouter" }, 65536)
+    ).toBe(16384);
+    expect(resolveProxyMaxTokens({ provider: "openrouter" }, undefined)).toBe(
+      16384
+    );
   });
 });

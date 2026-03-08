@@ -10,6 +10,7 @@ import {
   getAvailableModels,
   getConversations,
   getEndpoints,
+  getMcpTools,
   getMessages,
   summarizeConversationTitle,
   updateConversation,
@@ -44,6 +45,7 @@ import {
   Popover,
   Select,
   Slider,
+  Switch,
   Tooltip,
   Upload,
   message as antdMessage,
@@ -226,10 +228,14 @@ export default () => {
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<API.Message[]>([]);
   const [models, setModels] = useState<API.Model[]>([]);
+  const [mcpTools, setMcpTools] = useState<API.McpTool[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [defaultEndpointId, setDefaultEndpointId] = useState<number | null>(
     null
   );
+  const [defaultEndpointProvider, setDefaultEndpointProvider] = useState<
+    API.Endpoint["provider"] | undefined
+  >(undefined);
 
   // 输入状态
   const [inputText, setInputText] = useState("");
@@ -290,6 +296,7 @@ export default () => {
 
   // 会话搜索状态
   const [searchQuery, setSearchQuery] = useState("");
+  const [savingConversationTools, setSavingConversationTools] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -417,10 +424,12 @@ export default () => {
 
   const loadInitData = async () => {
     try {
-      const [convs, availableModels, endpoints] = await Promise.all([
+      const [convs, availableModels, endpoints, availableMcpTools] =
+        await Promise.all([
         getConversations(),
         getAvailableModels(),
         getEndpoints(),
+        getMcpTools(),
       ]);
       const defaultEndpoint =
         endpoints.find((endpoint) => !!endpoint.is_default) || null;
@@ -432,7 +441,9 @@ export default () => {
 
       setConversations(convs);
       setModels(availableModels);
+      setMcpTools(Array.isArray(availableMcpTools) ? availableMcpTools : []);
       setDefaultEndpointId(nextDefaultEndpointId);
+      setDefaultEndpointProvider(defaultEndpoint?.provider);
       setSelectedModel((prev) => {
         if (
           storedModel &&
@@ -762,6 +773,97 @@ export default () => {
     }
   };
 
+  const availableToolMap = new Map<string, API.McpTool>();
+  (Array.isArray(mcpTools) ? mcpTools : []).forEach((tool) => {
+    const toolName = String(tool?.function?.name || "").trim();
+    if (toolName && !availableToolMap.has(toolName)) {
+      availableToolMap.set(toolName, tool);
+    }
+  });
+
+  const availableToolNames = Array.from(availableToolMap.keys()).sort((a, b) =>
+    a.localeCompare(b, "zh-CN")
+  );
+
+  const conversationUsesAllTools = currentConv?.tool_names == null;
+  const selectedConversationToolNames = Array.isArray(currentConv?.tool_names)
+    ? currentConv.tool_names.filter((toolName) => availableToolMap.has(toolName))
+    : [];
+
+  const toolSelectOptions = availableToolNames.map((toolName) => {
+    const tool = availableToolMap.get(toolName);
+    return {
+      value: toolName,
+      searchText: `${toolName} ${tool?.function?.description || ""}`.toLowerCase(),
+      label: (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span>{toolName}</span>
+          {tool?.function?.description ? (
+            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+              {tool.function.description}
+            </span>
+          ) : null}
+        </div>
+      ),
+    };
+  });
+
+  const conversationToolButtonText = !currentConv
+    ? "工具"
+    : conversationUsesAllTools
+    ? availableToolNames.length > 0
+      ? `全部工具 (${availableToolNames.length})`
+      : "工具"
+    : selectedConversationToolNames.length > 0
+    ? `已选工具 (${selectedConversationToolNames.length})`
+    : "工具已关闭";
+
+  const persistConversationTools = async (toolNames: string[] | null) => {
+    if (!currentConvId) return;
+
+    try {
+      setSavingConversationTools(true);
+      await updateConversation(
+        currentConvId,
+        undefined,
+        undefined,
+        toolNames
+      );
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          String(conversation.id) === String(currentConvId)
+            ? { ...conversation, tool_names: toolNames }
+            : conversation
+        )
+      );
+      messageApi.success(
+        toolNames === null
+          ? "当前会话已恢复为全部已启用工具"
+          : toolNames.length > 0
+          ? `当前会话已限制为 ${toolNames.length} 个工具`
+          : "当前会话已禁用所有工具"
+      );
+    } catch (error) {
+      console.error(error);
+      messageApi.error("保存会话工具设置失败");
+    } finally {
+      setSavingConversationTools(false);
+    }
+  };
+
+  const handleConversationToolModeChange = async (checked: boolean) => {
+    if (checked) {
+      await persistConversationTools(null);
+      return;
+    }
+
+    const nextToolNames =
+      selectedConversationToolNames.length > 0
+        ? selectedConversationToolNames
+        : availableToolNames;
+    await persistConversationTools(nextToolNames);
+  };
+
   const generationConfig: Record<string, number> = {
     temperature: Number(clamp(temperature, 0, 2).toFixed(2)),
     top_p: Number(clamp(topP, 0, 1).toFixed(2)),
@@ -769,6 +871,11 @@ export default () => {
   if (maxTokens !== -1) {
     generationConfig.max_tokens = clamp(Math.round(maxTokens), 256, 8192);
   }
+
+  const autoMaxTokensLabel =
+    defaultEndpointProvider === "openrouter"
+      ? "自动（OpenRouter 默认 16384）"
+      : "自动（不传）";
 
   // 核心发送函数（兼容 send + regenerate）
   const streamChat = async (
@@ -1419,6 +1526,82 @@ export default () => {
                   </Button>
                 </Tooltip>
               )}
+              {currentConvId && (
+                <Popover
+                  trigger="click"
+                  placement="bottomLeft"
+                  content={
+                    <div className="conversation-tool-config">
+                      <div className="conversation-tool-config-head">
+                        <div className="conversation-tool-config-title">
+                          对话工具
+                        </div>
+                        <Switch
+                          size="small"
+                          checked={conversationUsesAllTools}
+                          checkedChildren="全部"
+                          unCheckedChildren="自定义"
+                          loading={savingConversationTools}
+                          onChange={handleConversationToolModeChange}
+                        />
+                      </div>
+                      <div className="conversation-tool-config-hint">
+                        开启“全部”时，当前会话可使用所有已启用 MCP 工具；关闭后只开放下面勾选的工具。
+                      </div>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        value={selectedConversationToolNames}
+                        onChange={(values) => persistConversationTools(values)}
+                        options={toolSelectOptions}
+                        disabled={
+                          conversationUsesAllTools ||
+                          savingConversationTools ||
+                          toolSelectOptions.length === 0
+                        }
+                        placeholder={
+                          toolSelectOptions.length === 0
+                            ? "暂无可用 MCP 工具"
+                            : "选择本会话允许调用的工具"
+                        }
+                        className="conversation-tool-select"
+                        popupMatchSelectWidth={360}
+                        showSearch
+                        filterOption={(input, option) =>
+                          String(option?.searchText || "").includes(
+                            input.trim().toLowerCase()
+                          )
+                        }
+                      />
+                      {!conversationUsesAllTools &&
+                      selectedConversationToolNames.length === 0 ? (
+                        <div className="conversation-tool-config-warning">
+                          当前会话已禁用所有工具，模型将只做纯文本回答。
+                        </div>
+                      ) : null}
+                    </div>
+                  }
+                >
+                  <Tooltip title="设置当前对话可用工具">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<ToolOutlined />}
+                      loading={savingConversationTools}
+                      style={{
+                        color: !conversationUsesAllTools
+                          ? "#0f766e"
+                          : undefined,
+                        fontWeight: !conversationUsesAllTools
+                          ? 600
+                          : undefined,
+                      }}
+                    >
+                      {conversationToolButtonText}
+                    </Button>
+                  </Tooltip>
+                </Popover>
+              )}
             </div>
             <div className="header-right">
               {isMobile && (
@@ -1752,7 +1935,7 @@ export default () => {
                             <span>
                               Max Tokens:{" "}
                               {maxTokens === -1
-                                ? "自动（不传）"
+                                ? autoMaxTokensLabel
                                 : Math.round(maxTokens)}
                             </span>
                             <Button

@@ -13,6 +13,7 @@ import db, {
   getModels,
   logUsage,
   updateConversationSystemPrompt,
+  updateConversationToolNames,
   updateConversationTitle,
   updateMessage,
 } from "../models/database.js";
@@ -73,8 +74,14 @@ router.get("/", (req, res) => {
 
 router.post("/", (req, res) => {
   try {
-    const { title } = req.body;
-    res.json(createConversation(req.uid, title));
+    const { title, tool_names } = req.body;
+    res.json(
+      createConversation(
+        req.uid,
+        title,
+        Array.isArray(tool_names) ? tool_names : null
+      )
+    );
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -83,10 +90,17 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { title, system_prompt } = req.body;
+    const { title, system_prompt, tool_names } = req.body;
     if (title !== undefined) updateConversationTitle(id, req.uid, title);
     if (system_prompt !== undefined)
       updateConversationSystemPrompt(id, req.uid, system_prompt);
+    if (tool_names !== undefined) {
+      updateConversationToolNames(
+        id,
+        req.uid,
+        Array.isArray(tool_names) ? tool_names : null
+      );
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -372,6 +386,19 @@ function normalizeGenerationConfig(input = {}) {
       ? { max_tokens: Math.round(Math.min(8192, Math.max(64, maxTokens))) }
       : {}),
   };
+}
+
+export function resolveEndpointGenerationConfig(endpoint, generationConfig = {}) {
+  const normalized = { ...(generationConfig || {}) };
+
+  if (
+    normalized.max_tokens === undefined &&
+    String(endpoint?.provider || "").toLowerCase() === "openrouter"
+  ) {
+    normalized.max_tokens = 16384;
+  }
+
+  return normalized;
 }
 
 function getUpstreamErrorMessage(error) {
@@ -669,10 +696,17 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
     console.error("Failed to get MCP tools: ", e);
     return [];
   });
+  const allowedToolNames = Array.isArray(opts.allowedToolNames)
+    ? new Set(opts.allowedToolNames)
+    : null;
+  const filteredTools =
+    allowedToolNames === null
+      ? allTools
+      : allTools.filter((tool) => allowedToolNames.has(tool.function?.name));
   // Strip internal _mcp_server_id field before sending to OpenAI
   const requestTools =
-    allTools.length > 0
-      ? allTools.map(({ _mcp_server_id, ...t }) => t)
+    filteredTools.length > 0
+      ? filteredTools.map(({ _mcp_server_id, ...t }) => t)
       : undefined;
 
   let maxToolLoops = 5;
@@ -694,12 +728,16 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
         let triedWithoutStreamOptions = false;
         try {
           const client = new OpenAI({ apiKey: ep.api_key, baseURL });
+          const endpointGenerationConfig = resolveEndpointGenerationConfig(
+            ep,
+            opts.generationConfig
+          );
           const baseParams = {
             model,
             messages: currentMessages,
             stream: true,
             tools: requestTools,
-            ...(opts.generationConfig || {}),
+            ...endpointGenerationConfig,
           };
 
           let stream;
@@ -731,6 +769,7 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               messageCount: currentMessages.length,
               hasTools: !!requestTools?.length,
               retriedWithoutStreamOptions: triedWithoutStreamOptions,
+              generationConfig: endpointGenerationConfig,
             },
             "Upstream stream connected"
           );
@@ -926,7 +965,7 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               );
 
               let resultContent = "";
-              const toolDef = allTools.find(
+              const toolDef = filteredTools.find(
                 (t) => t.function.name === funcName
               );
               if (toolDef && toolDef._mcp_server_id) {
@@ -1089,6 +1128,7 @@ router.post("/:id/chat", async (req, res) => {
         source: "chat",
         aiMsgId: aiMsg.id,
         generationConfig,
+        allowedToolNames: conversation?.tool_names,
       }
     );
 
@@ -1198,6 +1238,7 @@ router.post("/:id/regenerate", async (req, res) => {
         source: "chat",
         aiMsgId: aiMsg.id,
         generationConfig,
+        allowedToolNames: conversation?.tool_names,
       }
     );
 
@@ -1296,6 +1337,7 @@ router.put("/:id/messages/:msgId", async (req, res) => {
         source: "chat",
         aiMsgId: aiMsg.id,
         generationConfig,
+        allowedToolNames: conversation?.tool_names,
       }
     );
 

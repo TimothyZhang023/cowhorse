@@ -3,12 +3,14 @@ import { authMiddleware } from "../middleware/auth.js";
 import { runAgentTask } from "../models/agentEngine.js";
 import {
   createAgentTask,
+  createSkill,
   deleteAgentTask,
   listTaskRunEvents,
   listTaskRuns,
   listAgentTasks,
   updateAgentTask,
 } from "../models/database.js";
+import { generateAgentTaskBlueprint } from "../utils/agentTaskGenerator.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -69,6 +71,52 @@ router.post("/", (req, res) => {
     res.json(task);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/generate", async (req, res) => {
+  try {
+    const requirement = req.body?.requirement;
+    const autoCreate = Boolean(
+      req.body?.auto_create !== undefined
+        ? req.body.auto_create
+        : req.body?.autoCreate
+    );
+
+    const result = await generateAgentTaskBlueprint(req.uid, requirement);
+
+    if (autoCreate) {
+      const createdSkills = result.suggested_skills.map((skill) =>
+        createSkill(
+          req.uid,
+          skill.name,
+          skill.description,
+          skill.prompt,
+          [],
+          skill.tools || []
+        )
+      );
+
+      const task = createAgentTask(
+        req.uid,
+        result.draft.name,
+        result.draft.description,
+        result.draft.system_prompt,
+        [...(result.draft.skill_ids || []), ...createdSkills.map((skill) => skill.id)],
+        result.draft.tool_names || [],
+        result.draft.model_id || ""
+      );
+
+      return res.json({
+        ...result,
+        created_skills: createdSkills,
+        task,
+      });
+    }
+
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
