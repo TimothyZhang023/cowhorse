@@ -32,6 +32,7 @@ import "../Dashboard/index.css";
 
 export default () => {
   const { currentUser, isLoggedIn } = useModel("global");
+  const [messageApi, messageContextHolder] = message.useMessage();
   const [moduleExpanded, setModuleExpanded] = useState(true);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [showAccount, setShowAccount] = useState(false);
@@ -51,7 +52,7 @@ export default () => {
       setServers(data);
     } catch (error) {
       console.error(error);
-      message.error("获取 MCP 服务器列表失败");
+      messageApi.error("获取 MCP 服务器列表失败");
     } finally {
       setLoading(false);
     }
@@ -64,20 +65,20 @@ export default () => {
   const handleDelete = async (id: number) => {
     try {
       await deleteMcpServer(id);
-      message.success("删除成功");
+      messageApi.success("删除成功");
       loadServers();
     } catch (error) {
-      message.error("删除失败");
+      messageApi.error("删除失败");
     }
   };
 
   const handleToggleEnable = async (row: API.McpServer, checked: boolean) => {
     try {
       await updateMcpServer(row.id, { is_enabled: checked ? 1 : 0 });
-      message.success(checked ? "已启用" : "已禁用");
+      messageApi.success(checked ? "已启用" : "已禁用");
       loadServers();
     } catch (error) {
-      message.error("状态修改失败");
+      messageApi.error("状态修改失败");
     }
   };
 
@@ -91,6 +92,7 @@ export default () => {
         token: { motion: false },
       }}
     >
+      {messageContextHolder}
       <div
         className={`cw-dashboard-layout ${isDark ? "dark" : ""}`}
         style={{ height: "100vh" }}
@@ -197,7 +199,7 @@ export default () => {
           title={editingServer?.id ? "编辑 MCP 服务器" : "添加 MCP 服务器"}
           open={!!editingServer}
           onOpenChange={(visible) => !visible && setEditingServer(null)}
-          modalProps={{ destroyOnClose: true }}
+          modalProps={{ destroyOnHidden: true }}
           initialValues={editingServer || {}}
           onFinish={async (values) => {
             try {
@@ -206,11 +208,11 @@ export default () => {
                 formValues.args = formValues.args.trim().split(/\s+/).filter(Boolean);
               }
               if (formValues.type === "stdio" && !formValues.command) {
-                message.error("本地命令行必须填写可执行命令");
+                messageApi.error("本地命令行必须填写可执行命令");
                 return false;
               }
               if (formValues.type === "sse" && !formValues.url) {
-                message.error("远程服务必须填写 URL");
+                messageApi.error("远程服务必须填写 URL");
                 return false;
               }
 
@@ -218,7 +220,7 @@ export default () => {
                 try {
                   formValues.headers = JSON.parse(formValues.headers);
                 } catch (e) {
-                  message.error("Headers JSON 格式不正确");
+                  messageApi.error("Headers JSON 格式不正确");
                   return false;
                 }
               }
@@ -226,7 +228,7 @@ export default () => {
                 try {
                   formValues.auth = JSON.parse(formValues.auth);
                 } catch (e) {
-                  message.error("Auth JSON 格式不正确");
+                  messageApi.error("Auth JSON 格式不正确");
                   return false;
                 }
               }
@@ -238,13 +240,13 @@ export default () => {
               } else {
                 await createMcpServer(formValues);
               }
-              message.success("保存成功");
+              messageApi.success("保存成功");
               loadServers();
               setEditingServer(null);
               return true;
             } catch (error) {
               console.error(error);
-              message.error("保存失败");
+              messageApi.error("保存失败");
               return false;
             }
           }}

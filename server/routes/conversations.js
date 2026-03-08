@@ -23,6 +23,44 @@ const router = Router();
 router.use(authMiddleware);
 const titleSummaryInFlight = new Set();
 
+export function normalizeMessageForClient(message) {
+  if (
+    message?.role === "assistant" &&
+    message?.content &&
+    message.content.startsWith("[TOOL_CALLS]:")
+  ) {
+    try {
+      return {
+        ...message,
+        content: "",
+        tool_calls: JSON.parse(message.content.slice(13)),
+      };
+    } catch {
+      return message;
+    }
+  }
+
+  if (
+    message?.role === "tool" &&
+    message?.content &&
+    message.content.startsWith("[TOOL_RESULT:")
+  ) {
+    const match = message.content.match(
+      /^\[TOOL_RESULT:([^:]+):([^\]]+)\]:(.*)$/s
+    );
+    if (match) {
+      return {
+        ...message,
+        content: match[3],
+        tool_call_id: match[1],
+        name: match[2],
+      };
+    }
+  }
+
+  return message;
+}
+
 // ============ 对话 CRUD ============
 
 router.get("/", (req, res) => {
@@ -66,7 +104,11 @@ router.delete("/:id", (req, res) => {
 
 router.get("/:id/messages", (req, res) => {
   try {
-    res.json(getMessages(req.params.id, req.uid));
+    res.json(
+      getMessages(req.params.id, req.uid).map((message) =>
+        normalizeMessageForClient(message)
+      )
+    );
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

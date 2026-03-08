@@ -6,6 +6,7 @@ import {
   deleteCronJob,
   listAllCronJobs,
   listCronJobs,
+  listTaskRuns,
   updateCronJob,
 } from "../models/database.js";
 
@@ -16,6 +17,20 @@ router.get("/", (req, res) => {
   try {
     const jobs = listCronJobs(req.uid);
     res.json(jobs);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/history", (req, res) => {
+  try {
+    const { cronJobId, limit } = req.query;
+    const runs = listTaskRuns(req.uid, {
+      triggerSource: "cron",
+      cronJobId: cronJobId ? Number(cronJobId) : undefined,
+      limit: limit ? Number(limit) : 30,
+    });
+    res.json(runs);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

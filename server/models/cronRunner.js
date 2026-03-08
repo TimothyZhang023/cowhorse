@@ -4,7 +4,7 @@ import { logger } from "../utils/logger.js";
 import { runAgentTask } from "./agentEngine.js";
 import { updateCronJob } from "./database.js";
 
-const activeCronJobs = new Map(); // key: jobId, value: { job, task_id }
+const activeCronJobs = new Map(); // key: jobId, value: { job, task_id, cron_expression, running }
 
 export function getNextRunAt(cronExpression, options = {}) {
   return CronExpressionParser.parse(cronExpression, options)
@@ -61,6 +61,19 @@ export function syncCronJobs(allCronJobs) {
 
     try {
       const task = cron.schedule(dbJob.cron_expression, async () => {
+        const current = activeCronJobs.get(dbJob.id);
+        if (current?.running) {
+          logger.warn(
+            { jobId: dbJob.id, taskId: dbJob.task_id },
+            "[CronRunner] Skip overlapping execution because previous run is still active"
+          );
+          return;
+        }
+
+        if (current) {
+          current.running = true;
+        }
+
         logger.info(
           { jobId: dbJob.id, taskId: dbJob.task_id },
           "[CronRunner] Executing scheduled task"
@@ -70,6 +83,8 @@ export function syncCronJobs(allCronJobs) {
           updateCronJob(dbJob.id, dbJob.uid, { last_status: "running" });
           await runAgentTask(dbJob.uid, dbJob.task_id, {
             initialUserMessage: `[CRON] Automated run triggered by rule: ${dbJob.name}`,
+            triggerSource: "cron",
+            cronJobId: dbJob.id,
           });
 
           const nextRun = getNextRunAt(dbJob.cron_expression);
@@ -87,6 +102,11 @@ export function syncCronJobs(allCronJobs) {
             last_run: new Date().toISOString(),
             last_status: "failed",
           });
+        } finally {
+          const latest = activeCronJobs.get(dbJob.id);
+          if (latest) {
+            latest.running = false;
+          }
         }
       });
 
@@ -94,6 +114,7 @@ export function syncCronJobs(allCronJobs) {
         job: task,
         cron_expression: dbJob.cron_expression,
         task_id: dbJob.task_id,
+        running: false,
       });
 
       const nextRun = getNextRunAt(dbJob.cron_expression);

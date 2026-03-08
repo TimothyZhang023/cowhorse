@@ -29,9 +29,10 @@ import {
   SlidersOutlined,
   StopOutlined,
   ThunderboltOutlined,
+  ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { history, useIntl, useModel } from "@umijs/max";
+import { history, useIntl, useModel, useSearchParams } from "@umijs/max";
 import {
   Avatar,
   Button,
@@ -134,6 +135,30 @@ const extractDisplayContent = (content: string): string => {
 // 检查消息是否包含图片
 const hasImage = (content: string): boolean => content.includes("[IMAGE_DATA:");
 
+const getToolMessageName = (message: API.Message): string => {
+  if (message.name) return message.name;
+
+  const runningMatch = String(message.content || "").match(
+    /^🔧 正在执行工具：(.+?)\.\.\.$/
+  );
+  return runningMatch?.[1] || "工具执行";
+};
+
+const getToolMessageStatus = (
+  message: API.Message
+): "running" | "error" | "success" => {
+  const content = String(message.content || "");
+  if (content.startsWith("🔧 正在执行工具：")) {
+    return "running";
+  }
+
+  if (/error|failed|失败/i.test(content)) {
+    return "error";
+  }
+
+  return "success";
+};
+
 const STREAM_FLUSH_INTERVAL = 16;
 const STREAM_SEGMENT_DRAIN_INTERVAL = 20;
 const TITLE_REFRESH_DELAYS = [1200, 2600, 5000, 9000];
@@ -181,6 +206,9 @@ const getResponseErrorMessage = async (response: Response) => {
 export default () => {
   const { currentUser, logout, isLoggedIn } = useModel("global");
   const intl = useIntl();
+  const [searchParams] = useSearchParams();
+  const requestedConversationId = searchParams.get("conversationId");
+  const [messageApi, messageContextHolder] = antdMessage.useMessage();
 
   // UI 状态
   const [theme, setTheme] = useState<"light" | "dark">(getStoredTheme);
@@ -331,6 +359,18 @@ export default () => {
   }, [isLoggedIn]);
 
   useEffect(() => {
+    if (
+      !requestedConversationId ||
+      currentConvId === requestedConversationId ||
+      !conversations.some((conv) => String(conv.id) === requestedConversationId)
+    ) {
+      return;
+    }
+
+    handleSelectConversation(requestedConversationId);
+  }, [requestedConversationId, conversations, currentConvId]);
+
+  useEffect(() => {
     const handleHistoryCleared = () => {
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
@@ -405,7 +445,14 @@ export default () => {
         }
         return availableModels[0]?.model_id || "";
       });
-      if (convs.length > 0) handleSelectConversation(convs[0].id);
+      if (convs.length > 0) {
+        const initialConversationId =
+          requestedConversationId &&
+          convs.some((conv) => String(conv.id) === requestedConversationId)
+            ? requestedConversationId
+            : convs[0].id;
+        handleSelectConversation(initialConversationId);
+      }
     } catch (error) {
       console.error(error);
     }
@@ -709,9 +756,9 @@ export default () => {
           c.id === currentConvId ? { ...c, system_prompt: prompt } : c
         )
       );
-      antdMessage.success("System Prompt 已保存");
+      messageApi.success("System Prompt 已保存");
     } catch (e) {
-      antdMessage.error("保存失败");
+      messageApi.error("保存失败");
     }
   };
 
@@ -869,7 +916,7 @@ export default () => {
             `❌ ${error.message || "发送失败，请检查网络和 API 配置"}`
           );
         }
-        antdMessage.error(error.message || "发送失败，请检查网络和 API 配置");
+        messageApi.error(error.message || "发送失败，请检查网络和 API 配置");
         console.error(error);
       }
     } finally {
@@ -888,7 +935,7 @@ export default () => {
   const sendMessage = async () => {
     if ((!inputText.trim() && pendingImages.length === 0) || loading) return;
     if (!selectedModel) {
-      antdMessage.error("请先选择模型");
+      messageApi.error("请先选择模型");
       return;
     }
 
@@ -934,7 +981,7 @@ export default () => {
   const handleRegenerate = async () => {
     if (!currentConvId || loading) return;
     if (!selectedModel) {
-      antdMessage.error("请先选择模型");
+      messageApi.error("请先选择模型");
       return;
     }
     // 删除界面上最后一条 assistant 消息
@@ -954,7 +1001,7 @@ export default () => {
   const handleSaveEdit = async (msgId: number) => {
     if (!currentConvId || loading || !editingMsgContent.trim()) return;
     if (!selectedModel) {
-      antdMessage.error("请先选择模型");
+      messageApi.error("请先选择模型");
       return;
     }
 
@@ -1103,7 +1150,7 @@ export default () => {
             `❌ ${error.message || "发送失败，请检查网络和 API 配置"}`
           );
         }
-        antdMessage.error(error.message || "发送失败，请检查网络和 API 配置");
+        messageApi.error(error.message || "发送失败，请检查网络和 API 配置");
         console.error(error);
       }
     } finally {
@@ -1127,7 +1174,7 @@ export default () => {
   const handleCopyMessage = (content: string) => {
     const displayContent = extractDisplayContent(content);
     navigator.clipboard.writeText(displayContent);
-    antdMessage.success("已复制到剪贴板");
+    messageApi.success("已复制到剪贴板");
   };
 
   const handleImageAdd = (file: File) => {
@@ -1152,7 +1199,7 @@ export default () => {
         preview: URL.createObjectURL(file),
       })),
     ]);
-    antdMessage.success(`已粘贴 ${imageFiles.length} 张图片`);
+    messageApi.success(`已粘贴 ${imageFiles.length} 张图片`);
   };
 
   const handleImageRemove = (index: number) => {
@@ -1167,6 +1214,15 @@ export default () => {
 
   const filteredConversations = conversations.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  const visibleMessages = messages.filter(
+    (msg) =>
+      !(
+        msg.role === "assistant" &&
+        !msg.content &&
+        Array.isArray(msg.tool_calls) &&
+        msg.tool_calls.length > 0
+      )
   );
   const modelOptions = models.map((model) => ({
     label: model.model_id,
@@ -1283,7 +1339,7 @@ export default () => {
     </div>
   );
 
-  const lastAssistantIdx = [...messages]
+  const lastAssistantIdx = [...visibleMessages]
     .map((m) => m.role)
     .lastIndexOf("assistant");
 
@@ -1299,6 +1355,7 @@ export default () => {
         },
       }}
     >
+      {messageContextHolder}
       <div
         className={`chat-layout cw-dashboard-layout ${isDark ? "dark" : ""}`}
       >
@@ -1406,7 +1463,7 @@ export default () => {
                     <div className="empty-hint">按 Ctrl+N 创建新对话</div>
                   </div>
                 ) : (
-                  messages.map((msg, idx) => (
+                  visibleMessages.map((msg, idx) => (
                     <div key={idx} className={`message-row ${msg.role}`}>
                       {msg.role === "assistant" && (
                         <Avatar
@@ -1414,6 +1471,11 @@ export default () => {
                           size={32}
                         >
                           AI
+                        </Avatar>
+                      )}
+                      {msg.role === "tool" && (
+                        <Avatar className="msg-avatar tool-avatar" size={32}>
+                          <ToolOutlined />
                         </Avatar>
                       )}
                       <div className={`message-bubble ${msg.role}`}>
@@ -1458,6 +1520,26 @@ export default () => {
                             ) : (
                               extractDisplayContent(msg.content)
                             )}
+                          </div>
+                        ) : msg.role === "tool" ? (
+                          <div
+                            className={`tool-message-card ${getToolMessageStatus(msg)}`}
+                          >
+                            <div className="tool-message-header">
+                              <span className="tool-message-name">
+                                {getToolMessageName(msg)}
+                              </span>
+                              <span className="tool-message-status">
+                                {getToolMessageStatus(msg) === "running"
+                                  ? "运行中"
+                                  : getToolMessageStatus(msg) === "error"
+                                  ? "失败"
+                                  : "完成"}
+                              </span>
+                            </div>
+                            <pre className="tool-message-body">
+                              {extractDisplayContent(msg.content)}
+                            </pre>
                           </div>
                         ) : (
                           <div
@@ -1604,7 +1686,7 @@ export default () => {
                     }}
                     placeholder="问问 CW… (Shift+Enter 换行 / Enter 发送)"
                     autoSize={{ minRows: 1, maxRows: 6 }}
-                    bordered={false}
+                    variant="borderless"
                     disabled={loading}
                     className="chat-input chat-input-textarea"
                   />
@@ -1621,7 +1703,7 @@ export default () => {
                         )
                       }
                       popupMatchSelectWidth={460}
-                      bordered={false}
+                      variant="borderless"
                       className="model-select"
                       disabled={loading}
                       placeholder="搜索或选择模型"

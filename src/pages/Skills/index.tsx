@@ -28,6 +28,7 @@ import "../Dashboard/index.css";
 
 export default () => {
   const { currentUser, isLoggedIn } = useModel("global");
+  const [messageApi, messageContextHolder] = message.useMessage();
   const [moduleExpanded, setModuleExpanded] = useState(true);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [showAccount, setShowAccount] = useState(false);
@@ -46,7 +47,7 @@ export default () => {
       const data = await getSkills();
       setSkills(data);
     } catch (e) {
-      message.error("加载技能失败");
+      messageApi.error("加载技能失败");
     } finally {
       setLoading(false);
     }
@@ -66,6 +67,7 @@ export default () => {
         token: { motion: false },
       }}
     >
+      {messageContextHolder}
       <div className={`cw-dashboard-layout ${isDark ? "dark" : ""}`}>
         <Sidebar
           moduleExpanded={moduleExpanded}
@@ -135,7 +137,7 @@ export default () => {
                         style={{ color: "red" }}
                         onClick={async () => {
                           await deleteSkill(row.id);
-                          message.success("已删除");
+                          messageApi.success("已删除");
                           loadSkills();
                         }}
                       >
@@ -153,7 +155,7 @@ export default () => {
           title={editingSkill?.id ? "编辑技能" : "添加技能"}
           open={!!editingSkill}
           onOpenChange={(v) => !v && setEditingSkill(null)}
-          modalProps={{ destroyOnClose: true }}
+          modalProps={{ destroyOnHidden: true }}
           initialValues={editingSkill || {}}
           onFinish={async (values) => {
             if (editingSkill?.id) {
@@ -161,7 +163,7 @@ export default () => {
             } else {
               await createSkill(values);
             }
-            message.success("保存成功");
+            messageApi.success("保存成功");
             loadSkills();
             setEditingSkill(null);
             return true;

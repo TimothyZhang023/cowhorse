@@ -93,6 +93,36 @@ declare namespace API {
     updated_at?: string;
   };
 
+  type TaskRun = {
+    id: number;
+    uid?: string;
+    task_id: number;
+    task_name?: string;
+    cron_job_id?: number | null;
+    cron_job_name?: string | null;
+    conversation_id?: string | number | null;
+    conversation_title?: string | null;
+    trigger_source: "manual" | "cron";
+    status: "running" | "success" | "failed";
+    initial_message?: string;
+    final_response?: string;
+    error_message?: string;
+    started_at?: string;
+    finished_at?: string;
+    created_at?: string;
+  };
+
+  type TaskRunEvent = {
+    id: number;
+    run_id: number;
+    uid?: string;
+    event_type: string;
+    title: string;
+    content?: string;
+    metadata?: Record<string, any> | null;
+    created_at?: string;
+  };
+
   type CronJob = {
     id: number;
     task_id: number;

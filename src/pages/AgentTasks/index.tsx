@@ -9,10 +9,14 @@ import {
   getMcpServers,
   getMcpTools,
   getSkills,
+  getTaskRunEvents,
+  getTaskRuns,
   runAgentTask,
   updateAgentTask,
 } from "@/services/api";
 import {
+  ClockCircleOutlined,
+  HistoryOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RobotOutlined,
@@ -24,21 +28,80 @@ import {
   ProFormTextArea,
   ProList,
 } from "@ant-design/pro-components";
-import { useModel } from "@umijs/max";
+import { history, useModel } from "@umijs/max";
 import {
+  Alert,
   theme as antdTheme,
   Button,
   Card,
   ConfigProvider,
+  Drawer,
+  Empty,
+  Input,
+  Modal,
   message,
+  Spin,
   Space,
   Tag,
+  Timeline,
+  Typography,
 } from "antd";
 import { useEffect, useState } from "react";
 import "../Dashboard/index.css";
 
+type TaskRunState = {
+  runId: number;
+  conversationId: string;
+  finalResponse: string;
+};
+
+const formatRunStatus = (status?: string) => {
+  if (status === "success") return <Tag color="success">成功</Tag>;
+  if (status === "running") return <Tag color="processing">运行中</Tag>;
+  if (status === "failed") return <Tag color="error">失败</Tag>;
+  return <Tag>{status || "未知"}</Tag>;
+};
+
+const parseTimestamp = (value?: string) => {
+  if (!value) return Number.NaN;
+  const normalized =
+    typeof value === "string" &&
+    !/[zZ]|[+-]\d{2}:\d{2}$/.test(value) &&
+    value.includes(" ")
+      ? `${value.replace(" ", "T")}Z`
+      : value;
+  return Date.parse(normalized);
+};
+
+const formatTriggerSource = (triggerSource?: string) => {
+  if (triggerSource === "cron") return <Tag color="purple">Cron</Tag>;
+  return <Tag color="blue">手动</Tag>;
+};
+
+const formatDateTime = (value?: string) => {
+  if (!value) return "-";
+  const timestamp = parseTimestamp(value);
+  if (Number.isNaN(timestamp)) return value;
+  return new Date(timestamp).toLocaleString();
+};
+
+const formatDuration = (startedAt?: string, finishedAt?: string) => {
+  if (!startedAt || !finishedAt) return "进行中";
+  const duration = parseTimestamp(finishedAt) - parseTimestamp(startedAt);
+  if (!Number.isFinite(duration) || duration < 0) return "-";
+
+  if (duration < 1000) return `${duration}ms`;
+  const seconds = duration / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainSeconds}s`;
+};
+
 export default () => {
   const { currentUser, isLoggedIn } = useModel("global");
+  const [messageApi, messageContextHolder] = message.useMessage();
   const [moduleExpanded, setModuleExpanded] = useState(true);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [showAccount, setShowAccount] = useState(false);
@@ -53,6 +116,17 @@ export default () => {
   const [mcpServers, setMcpServers] = useState<API.McpServer[]>([]);
   const [availableModels, setAvailableModels] = useState<API.Model[]>([]);
   const [availableTools, setAvailableTools] = useState<any[]>([]);
+  const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
+  const [runModalTask, setRunModalTask] = useState<API.AgentTask | null>(null);
+  const [runMessage, setRunMessage] = useState("");
+  const [runResult, setRunResult] = useState<TaskRunState | null>(null);
+  const [taskRuns, setTaskRuns] = useState<API.TaskRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [selectedRun, setSelectedRun] = useState<API.TaskRun | null>(null);
+  const [selectedRunEvents, setSelectedRunEvents] = useState<API.TaskRunEvent[]>(
+    []
+  );
+  const [runEventsLoading, setRunEventsLoading] = useState(false);
 
   const isDark = theme === "dark";
 
@@ -72,7 +146,7 @@ export default () => {
       setAvailableModels(models);
       setAvailableTools(tools);
     } catch (e) {
-      message.error("加载数据失败");
+      messageApi.error("加载数据失败");
     } finally {
       setLoading(false);
     }
@@ -80,7 +154,87 @@ export default () => {
 
   useEffect(() => {
     loadData();
+    loadRuns();
   }, []);
+
+  const loadRuns = async () => {
+    setRunsLoading(true);
+    try {
+      const runs = await getTaskRuns(undefined, 20);
+      setTaskRuns(runs);
+    } catch (error) {
+      messageApi.error("加载任务运行记录失败");
+    } finally {
+      setRunsLoading(false);
+    }
+  };
+
+  const openRunModal = (task: API.AgentTask) => {
+    setRunModalTask(task);
+    setRunMessage("");
+    setRunResult(null);
+  };
+
+  const closeRunModal = () => {
+    if (runningTaskId !== null) return;
+    setRunModalTask(null);
+    setRunMessage("");
+    setRunResult(null);
+  };
+
+  const openConversation = (conversationId: string) => {
+    history.push(`/chat?conversationId=${encodeURIComponent(conversationId)}`);
+  };
+
+  const openRunTimeline = async (run: API.TaskRun) => {
+    setSelectedRun(run);
+    setRunEventsLoading(true);
+    try {
+      const events = await getTaskRunEvents(run.id);
+      setSelectedRunEvents(events);
+    } catch (error) {
+      messageApi.error("加载运行时间线失败");
+      setSelectedRunEvents([]);
+    } finally {
+      setRunEventsLoading(false);
+    }
+  };
+
+  const closeRunTimeline = () => {
+    setSelectedRun(null);
+    setSelectedRunEvents([]);
+  };
+
+  const handleRunTask = async () => {
+    if (!runModalTask) return;
+
+    try {
+      setRunningTaskId(runModalTask.id);
+      setRunResult(null);
+      const result = await runAgentTask(
+        runModalTask.id,
+        runMessage.trim() || undefined
+      );
+      const nextResult = {
+        runId: Number(result.runId),
+        conversationId: String(result.conversationId),
+        finalResponse: String(result.finalResponse || ""),
+      };
+      setRunResult(nextResult);
+      messageApi.success(`任务已启动，会话 ID: ${nextResult.conversationId}`);
+      await loadData();
+      await loadRuns();
+    } catch (error: any) {
+      messageApi.error(
+        error?.response?.data?.error ||
+          error?.data?.error ||
+          error?.message ||
+          "任务启动失败"
+      );
+    } finally {
+      setRunningTaskId(null);
+    }
+  };
 
   return (
     <ConfigProvider
@@ -92,6 +246,7 @@ export default () => {
         token: { motion: false },
       }}
     >
+      {messageContextHolder}
       <div className={`cw-dashboard-layout ${isDark ? "dark" : ""}`}>
         <Sidebar
           moduleExpanded={moduleExpanded}
@@ -175,13 +330,8 @@ export default () => {
                         key="run"
                         type="link"
                         icon={<PlayCircleOutlined />}
-                        onClick={async () => {
-                          message.loading("正在启动任务...");
-                          const result = await runAgentTask(row.id);
-                          message.success(
-                            "任务完成，对话 ID: " + result.conversationId
-                          );
-                        }}
+                        loading={runningTaskId === row.id}
+                        onClick={() => openRunModal(row)}
                       >
                         启动
                       </Button>,
@@ -193,7 +343,7 @@ export default () => {
                         style={{ color: "red" }}
                         onClick={async () => {
                           await deleteAgentTask(row.id);
-                          message.success("已删除");
+                          messageApi.success("已删除");
                           loadData();
                         }}
                       >
@@ -204,6 +354,93 @@ export default () => {
                 }}
               />
             </Card>
+
+            <Card className="cw-module-card" style={{ marginTop: 16 }}>
+              <div
+                style={{
+                  marginBottom: 16,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <Space>
+                  <HistoryOutlined style={{ fontSize: 18, color: "#0f766e" }} />
+                  <h3 style={{ margin: 0 }}>最近运行时间线</h3>
+                </Space>
+                <Button onClick={loadRuns} loading={runsLoading}>
+                  刷新时间线
+                </Button>
+              </div>
+
+              {runsLoading && taskRuns.length === 0 ? (
+                <div style={{ padding: "24px 0", textAlign: "center" }}>
+                  <Spin />
+                </div>
+              ) : taskRuns.length === 0 ? (
+                <Empty description="暂无任务运行记录" />
+              ) : (
+                <Timeline
+                  items={taskRuns.map((run) => ({
+                    color:
+                      run.status === "success"
+                        ? "green"
+                        : run.status === "failed"
+                        ? "red"
+                        : "blue",
+                    dot:
+                      run.status === "running" ? <ClockCircleOutlined /> : undefined,
+                    children: (
+                      <Space
+                        direction="vertical"
+                        size={4}
+                        style={{ width: "100%" }}
+                      >
+                        <Space wrap>
+                          <Typography.Text strong>
+                            {run.task_name || `Task ${run.task_id}`}
+                          </Typography.Text>
+                          {formatTriggerSource(run.trigger_source)}
+                          {formatRunStatus(run.status)}
+                        </Space>
+                        <Typography.Text type="secondary">
+                          开始于 {formatDateTime(run.started_at)} · 耗时{" "}
+                          {formatDuration(run.started_at, run.finished_at)}
+                        </Typography.Text>
+                        {run.final_response && (
+                          <Typography.Paragraph
+                            ellipsis={{ rows: 2, expandable: false }}
+                            style={{ marginBottom: 0 }}
+                          >
+                            {run.final_response}
+                          </Typography.Paragraph>
+                        )}
+                        {run.error_message && (
+                          <Typography.Text type="danger">
+                            {run.error_message}
+                          </Typography.Text>
+                        )}
+                        <Space wrap>
+                          <Button type="link" onClick={() => openRunTimeline(run)}>
+                            查看时间线
+                          </Button>
+                          {run.conversation_id && (
+                            <Button
+                              type="link"
+                              onClick={() =>
+                                openConversation(String(run.conversation_id))
+                              }
+                            >
+                              打开会话
+                            </Button>
+                          )}
+                        </Space>
+                      </Space>
+                    ),
+                  }))}
+                />
+              )}
+            </Card>
           </section>
         </main>
 
@@ -211,7 +448,7 @@ export default () => {
           title={editingTask?.id ? "编辑任务" : "创建任务"}
           open={!!editingTask}
           onOpenChange={(v) => !v && setEditingTask(null)}
-          modalProps={{ destroyOnClose: true }}
+          modalProps={{ destroyOnHidden: true }}
           initialValues={editingTask || {}}
           onFinish={async (values) => {
             if (editingTask?.id) {
@@ -219,7 +456,7 @@ export default () => {
             } else {
               await createAgentTask(values);
             }
-            message.success("保存成功");
+            messageApi.success("保存成功");
             loadData();
             setEditingTask(null);
             return true;
@@ -271,12 +508,217 @@ export default () => {
           />
         </ModalForm>
 
+        <Modal
+          title={runModalTask ? `Run & Debug · ${runModalTask.name}` : "Run & Debug"}
+          open={!!runModalTask}
+          onCancel={closeRunModal}
+          onOk={handleRunTask}
+          okText="启动任务"
+          confirmLoading={runningTaskId === runModalTask?.id}
+          cancelButtonProps={{ disabled: runningTaskId === runModalTask?.id }}
+          destroyOnHidden
+        >
+          {runModalTask && (
+            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+              <Card
+                size="small"
+                styles={{
+                  body: {
+                    background: isDark ? "rgba(15, 23, 42, 0.42)" : "#f8fafc",
+                    borderRadius: 12,
+                  },
+                }}
+              >
+                <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                  <Typography.Text strong>运行上下文</Typography.Text>
+                  <Space wrap>
+                    {(runModalTask.skill_ids || []).map((sid) => {
+                      const skill = skills.find((item) => item.id === sid);
+                      return (
+                        <Tag key={sid} color="orange">
+                          {skill?.name || `Skill ${sid}`}
+                        </Tag>
+                      );
+                    })}
+                    {(runModalTask.tool_names || []).map((name) => (
+                      <Tag key={name} color="cyan">
+                        {name}
+                      </Tag>
+                    ))}
+                    {!runModalTask.skill_ids?.length &&
+                      !runModalTask.tool_names?.length && <Tag>无额外挂载</Tag>}
+                  </Space>
+                  <Typography.Paragraph
+                    type="secondary"
+                    style={{ marginBottom: 0 }}
+                  >
+                    {runModalTask.description || "当前任务未填写简介。"}
+                  </Typography.Paragraph>
+                </Space>
+              </Card>
+
+              <div>
+                <Typography.Text strong>本次运行目标</Typography.Text>
+                <Input.TextArea
+                  rows={4}
+                  value={runMessage}
+                  onChange={(event) => setRunMessage(event.target.value)}
+                  placeholder="可选：输入这次运行的具体目标、约束或验收条件。留空时后端会自动补一条启动消息。"
+                  style={{ marginTop: 8 }}
+                  disabled={runningTaskId === runModalTask.id}
+                />
+              </div>
+
+              {runResult && (
+                <Alert
+                  showIcon
+                  type="success"
+                  message={`已创建运行会话 #${runResult.conversationId}`}
+                  description={
+                    <Space direction="vertical" size={8}>
+                      <Typography.Text type="secondary">
+                        {runResult.finalResponse
+                          ? runResult.finalResponse
+                          : "本次运行未生成最终总结，建议直接进入聊天页查看完整工具轨迹。"}
+                      </Typography.Text>
+                      <div>
+                        <Button
+                          type="link"
+                          style={{ paddingInline: 0 }}
+                          onClick={() => openConversation(runResult.conversationId)}
+                        >
+                          前往会话
+                        </Button>
+                        <Button
+                          type="link"
+                          style={{ paddingInline: 0, marginLeft: 12 }}
+                          onClick={() => {
+                            const matchedRun = taskRuns.find(
+                              (item) => item.id === runResult.runId
+                            );
+                            openRunTimeline(
+                              matchedRun || {
+                                id: runResult.runId,
+                                task_id: runModalTask.id,
+                                task_name: runModalTask.name,
+                                trigger_source: "manual",
+                                status: "success",
+                                conversation_id: runResult.conversationId,
+                                final_response: runResult.finalResponse,
+                              }
+                            );
+                          }}
+                        >
+                          查看时间线
+                        </Button>
+                      </div>
+                    </Space>
+                  }
+                />
+              )}
+            </Space>
+          )}
+        </Modal>
+
         <AccountModal
           open={showAccount}
           onClose={() => setShowAccount(false)}
           isDark={isDark}
         />
         <SettingsModal open={showSettings} onOpenChange={setShowSettings} />
+        <Drawer
+          title={
+            selectedRun
+              ? `运行时间线 · ${selectedRun.task_name || `Task ${selectedRun.task_id}`}`
+              : "运行时间线"
+          }
+          width={560}
+          open={!!selectedRun}
+          onClose={closeRunTimeline}
+          destroyOnHidden
+        >
+          {selectedRun && (
+            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+              <Card size="small">
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  <Space wrap>
+                    {formatTriggerSource(selectedRun.trigger_source)}
+                    {formatRunStatus(selectedRun.status)}
+                    <Typography.Text type="secondary">
+                      开始于 {formatDateTime(selectedRun.started_at)}
+                    </Typography.Text>
+                  </Space>
+                  <Typography.Text type="secondary">
+                    耗时 {formatDuration(selectedRun.started_at, selectedRun.finished_at)}
+                  </Typography.Text>
+                  {selectedRun.final_response && (
+                    <Typography.Paragraph style={{ marginBottom: 0 }}>
+                      {selectedRun.final_response}
+                    </Typography.Paragraph>
+                  )}
+                  {selectedRun.error_message && (
+                    <Typography.Text type="danger">
+                      {selectedRun.error_message}
+                    </Typography.Text>
+                  )}
+                  {selectedRun.conversation_id && (
+                    <Button
+                      type="link"
+                      style={{ paddingInline: 0 }}
+                      onClick={() =>
+                        openConversation(String(selectedRun.conversation_id))
+                      }
+                    >
+                      打开关联会话
+                    </Button>
+                  )}
+                </Space>
+              </Card>
+
+              {runEventsLoading ? (
+                <div style={{ padding: "32px 0", textAlign: "center" }}>
+                  <Spin />
+                </div>
+              ) : selectedRunEvents.length === 0 ? (
+                <Empty description="暂无时间线事件" />
+              ) : (
+                <Timeline
+                  items={selectedRunEvents.map((event) => ({
+                    color:
+                      event.event_type === "run_failed"
+                        ? "red"
+                        : event.event_type === "tool_failed"
+                        ? "red"
+                        : event.event_type === "forced_summary"
+                        ? "orange"
+                        : event.event_type === "run_completed"
+                        ? "green"
+                        : "blue",
+                    children: (
+                      <Space
+                        direction="vertical"
+                        size={2}
+                        style={{ width: "100%" }}
+                      >
+                        <Space wrap>
+                          <Typography.Text strong>{event.title}</Typography.Text>
+                          <Typography.Text type="secondary">
+                            {formatDateTime(event.created_at)}
+                          </Typography.Text>
+                        </Space>
+                        {event.content && (
+                          <Typography.Paragraph style={{ marginBottom: 0 }}>
+                            {event.content}
+                          </Typography.Paragraph>
+                        )}
+                      </Space>
+                    ),
+                  }))}
+                />
+              )}
+            </Space>
+          )}
+        </Drawer>
       </div>
     </ConfigProvider>
   );

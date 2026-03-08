@@ -4,6 +4,8 @@ import { runAgentTask } from "../models/agentEngine.js";
 import {
   createAgentTask,
   deleteAgentTask,
+  listTaskRunEvents,
+  listTaskRuns,
   listAgentTasks,
   updateAgentTask,
 } from "../models/database.js";
@@ -15,6 +17,28 @@ router.get("/", (req, res) => {
   try {
     const tasks = listAgentTasks(req.uid);
     res.json(tasks);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/runs", (req, res) => {
+  try {
+    const { taskId, limit } = req.query;
+    const runs = listTaskRuns(req.uid, {
+      taskId: taskId ? Number(taskId) : undefined,
+      limit: limit ? Number(limit) : 20,
+    });
+    res.json(runs);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/runs/:runId/events", (req, res) => {
+  try {
+    const events = listTaskRunEvents(Number(req.params.runId), req.uid);
+    res.json(events);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -72,6 +96,7 @@ router.post("/:id/run", async (req, res) => {
     const { message } = req.body;
     const result = await runAgentTask(req.uid, parseInt(req.params.id), {
       initialUserMessage: message,
+      triggerSource: "manual",
     });
     res.json(result);
   } catch (error) {

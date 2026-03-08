@@ -183,6 +183,39 @@ db.exec(`
     FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS task_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL,
+    task_id INTEGER NOT NULL,
+    cron_job_id INTEGER,
+    conversation_id INTEGER,
+    trigger_source TEXT DEFAULT 'manual',
+    status TEXT DEFAULT 'running',
+    initial_message TEXT,
+    final_response TEXT,
+    error_message TEXT,
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    finished_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(uid) REFERENCES users(uid) ON DELETE CASCADE,
+    FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY(cron_job_id) REFERENCES cron_jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS task_run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    uid TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(run_id) REFERENCES task_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY(uid) REFERENCES users(uid) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS folders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uid TEXT NOT NULL,
@@ -196,6 +229,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_agent_tasks_uid ON agent_tasks(uid);
   CREATE INDEX IF NOT EXISTS idx_cron_jobs_uid ON cron_jobs(uid);
   CREATE INDEX IF NOT EXISTS idx_cron_jobs_task_id ON cron_jobs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_uid ON task_runs(uid);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_cron_job_id ON task_runs(cron_job_id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_started_at ON task_runs(started_at);
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_run_id ON task_run_events(run_id);
 `);
 
 try {
@@ -1216,6 +1254,176 @@ export function updateAgentTask(id, uid, updates) {
 
 export function deleteAgentTask(id, uid) {
   db.prepare("DELETE FROM agent_tasks WHERE id = ? AND uid = ?").run(id, uid);
+}
+
+// ============ Task Runs / Timeline ============
+
+export function createTaskRun({
+  uid,
+  taskId,
+  cronJobId = null,
+  conversationId = null,
+  triggerSource = "manual",
+  status = "running",
+  initialMessage = "",
+}) {
+  const startedAt = new Date().toISOString();
+  const result = db
+    .prepare(
+      `
+    INSERT INTO task_runs (
+      uid, task_id, cron_job_id, conversation_id, trigger_source, status, initial_message, started_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `
+    )
+    .run(
+      uid,
+      taskId,
+      cronJobId,
+      conversationId,
+      triggerSource,
+      status,
+      initialMessage,
+      startedAt
+    );
+
+  return getTaskRun(result.lastInsertRowid, uid);
+}
+
+export function getTaskRun(id, uid) {
+  return db
+    .prepare(
+      `
+    SELECT
+      tr.*,
+      at.name AS task_name,
+      cj.name AS cron_job_name,
+      c.title AS conversation_title
+    FROM task_runs tr
+    JOIN agent_tasks at ON at.id = tr.task_id
+    LEFT JOIN cron_jobs cj ON cj.id = tr.cron_job_id
+    LEFT JOIN conversations c ON c.id = tr.conversation_id
+    WHERE tr.id = ? AND tr.uid = ?
+  `
+    )
+    .get(id, uid);
+}
+
+export function listTaskRuns(
+  uid,
+  { taskId, cronJobId, triggerSource, limit = 20 } = {}
+) {
+  const filters = ["tr.uid = ?"];
+  const values = [uid];
+
+  if (taskId) {
+    filters.push("tr.task_id = ?");
+    values.push(taskId);
+  }
+  if (cronJobId) {
+    filters.push("tr.cron_job_id = ?");
+    values.push(cronJobId);
+  }
+  if (triggerSource) {
+    filters.push("tr.trigger_source = ?");
+    values.push(triggerSource);
+  }
+
+  let sql = `
+    SELECT
+      tr.*,
+      at.name AS task_name,
+      cj.name AS cron_job_name,
+      c.title AS conversation_title
+    FROM task_runs tr
+    JOIN agent_tasks at ON at.id = tr.task_id
+    LEFT JOIN cron_jobs cj ON cj.id = tr.cron_job_id
+    LEFT JOIN conversations c ON c.id = tr.conversation_id
+    WHERE ${filters.join(" AND ")}
+    ORDER BY COALESCE(tr.started_at, tr.created_at) DESC, tr.id DESC
+  `;
+
+  if (limit && Number(limit) > 0) {
+    sql += " LIMIT ?";
+    values.push(Number(limit));
+  }
+
+  return db.prepare(sql).all(...values);
+}
+
+export function updateTaskRun(id, uid, updates) {
+  if (!id) return;
+
+  const fields = [];
+  const values = [];
+  for (const [key, value] of Object.entries(updates)) {
+    if (
+      [
+        "cron_job_id",
+        "conversation_id",
+        "status",
+        "initial_message",
+        "final_response",
+        "error_message",
+        "started_at",
+        "finished_at",
+      ].includes(key)
+    ) {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (fields.length === 0) return;
+  values.push(id, uid);
+
+  db.prepare(`UPDATE task_runs SET ${fields.join(", ")} WHERE id = ? AND uid = ?`).run(
+    ...values
+  );
+}
+
+export function addTaskRunEvent(
+  runId,
+  uid,
+  eventType,
+  title,
+  content = "",
+  metadata = null
+) {
+  const result = db
+    .prepare(
+      `
+    INSERT INTO task_run_events (run_id, uid, event_type, title, content, metadata)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `
+    )
+    .run(
+      runId,
+      uid,
+      eventType,
+      title,
+      content,
+      metadata ? JSON.stringify(metadata) : null
+    );
+
+  return result.lastInsertRowid;
+}
+
+export function listTaskRunEvents(runId, uid) {
+  return db
+    .prepare(
+      `
+    SELECT *
+    FROM task_run_events
+    WHERE run_id = ? AND uid = ?
+    ORDER BY created_at ASC, id ASC
+  `
+    )
+    .all(runId, uid)
+    .map((event) => ({
+      ...event,
+      metadata: event.metadata ? JSON.parse(event.metadata) : null,
+    }));
 }
 
 // ============ Cron Jobs 管理 ============

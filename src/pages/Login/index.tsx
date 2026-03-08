@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 export default () => {
   const [type, setType] = useState<string>("login");
   const { login: loginModel, isLoggedIn } = useModel("global");
+  const [messageApi, messageContextHolder] = message.useMessage();
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -21,18 +22,18 @@ export default () => {
     try {
       if (type === "register") {
         if (values.password !== values.confirmPassword) {
-          message.error("两次输入的密码不一致");
+          messageApi.error("两次输入的密码不一致");
           return;
         }
         const res = await register(values);
         if (res.token) {
-          message.success("注册成功");
+          messageApi.success("注册成功");
           await loginModel(res.user, res.token);
         }
       } else {
         const res = await login(values);
         if (res.token) {
-          message.success("登录成功");
+          messageApi.success("登录成功");
           await loginModel(res.user, res.token);
         }
       }
@@ -44,7 +45,7 @@ export default () => {
         (type === "login"
           ? "登录失败，请检查用户名或密码"
           : "注册失败，请稍后重试");
-      message.error(msg);
+      messageApi.error(msg);
     }
   };
 
@@ -61,6 +62,7 @@ export default () => {
         },
       }}
     >
+      {messageContextHolder}
       <div
         style={{
           background: "linear-gradient(180deg, #eef2ff 0%, #f8fafc 100%)",

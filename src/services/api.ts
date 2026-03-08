@@ -272,19 +272,46 @@ export async function deleteAgentTask(id: number) {
 }
 
 export async function runAgentTask(id: number, message?: string) {
-  return request<{ conversationId: string; finalResponse: string }>(
+  return request<{ conversationId: string; finalResponse: string; runId: number }>(
     `/api/agent-tasks/${id}/run`,
     {
       method: "POST",
       data: { message },
+      timeout: 60000,
     }
   );
+}
+
+export async function getTaskRuns(taskId?: number, limit = 20) {
+  return request<API.TaskRun[]>("/api/agent-tasks/runs", {
+    method: "GET",
+    params: {
+      ...(taskId ? { taskId } : {}),
+      limit,
+    },
+  });
+}
+
+export async function getTaskRunEvents(runId: number) {
+  return request<API.TaskRunEvent[]>(`/api/agent-tasks/runs/${runId}/events`, {
+    method: "GET",
+  });
 }
 
 // Cron Jobs
 export async function getCronJobs() {
   return request<API.CronJob[]>("/api/cron-jobs", {
     method: "GET",
+  });
+}
+
+export async function getCronRunHistory(cronJobId?: number, limit = 30) {
+  return request<API.TaskRun[]>("/api/cron-jobs/history", {
+    method: "GET",
+    params: {
+      ...(cronJobId ? { cronJobId } : {}),
+      limit,
+    },
   });
 }
 
