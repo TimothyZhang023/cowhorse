@@ -4,18 +4,62 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { getMcpServer, listMcpServers } from "./database.js";
+import { getShellEnv } from "../utils/shellEnv.js";
 
 // Global map to hold connected MCP clients
 // key: string (e.g. `uid_serverId`), value: { client: Client, transport: Transport }
 const mcpClients = new Map();
 // Track in-progress connect attempts to prevent races
 const mcpConnecting = new Map();
+const activeBuiltInShellProcesses = new Map();
 
 export const BUILTIN_SHELL_SERVER_ID = "__builtin_shell__";
 export const BUILTIN_SHELL_TOOL_NAME = "shell_execute";
 const BUILTIN_SHELL_MAX_OUTPUT_CHARS = 24000;
 const BUILTIN_SHELL_DEFAULT_TIMEOUT_MS = 20000;
 const BUILTIN_SHELL_MAX_TIMEOUT_MS = 120000;
+
+function getExecutionScopeKey(scope = {}) {
+  const uid = String(scope?.uid || "").trim();
+  const conversationId = String(scope?.conversationId || "").trim();
+  if (!uid || !conversationId) {
+    return "";
+  }
+  return `${uid}:${conversationId}`;
+}
+
+function terminateChildProcess(child) {
+  if (!child || child.killed) return;
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    return;
+  }
+  setTimeout(() => {
+    if (!child.killed) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }
+  }, 800).unref?.();
+}
+
+export function abortBuiltInShellExecutions(scope = {}) {
+  const scopeKey = getExecutionScopeKey(scope);
+  if (!scopeKey) return 0;
+  const set = activeBuiltInShellProcesses.get(scopeKey);
+  if (!set || set.size === 0) return 0;
+
+  let killed = 0;
+  for (const child of set) {
+    terminateChildProcess(child);
+    killed += 1;
+  }
+  activeBuiltInShellProcesses.delete(scopeKey);
+  return killed;
+}
 
 function truncateShellOutput(value, maxLength = BUILTIN_SHELL_MAX_OUTPUT_CHARS) {
   const text = String(value || "");
@@ -99,7 +143,7 @@ export function getBuiltInTools() {
   ];
 }
 
-export async function executeBuiltInShellTool(args = {}) {
+export async function executeBuiltInShellTool(args = {}, options = {}) {
   const commandText = String(args?.command || "").trim();
   if (!commandText) {
     throw new Error("shell_execute 缺少 command");
@@ -111,28 +155,54 @@ export async function executeBuiltInShellTool(args = {}) {
     ? Math.max(1000, Math.min(BUILTIN_SHELL_MAX_TIMEOUT_MS, Math.round(requestedTimeout)))
     : BUILTIN_SHELL_DEFAULT_TIMEOUT_MS;
   const launch = getShellLaunchConfig(commandText);
+  const abortSignal = options?.signal || null;
+  const scopeKey = getExecutionScopeKey(options?.executionScope);
 
   const result = await new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
     const child = spawn(launch.command, launch.args, {
       cwd,
-      env: process.env,
+      env: getShellEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const finalizeScopeTracking = () => {
+      if (!scopeKey) return;
+      const scopeSet = activeBuiltInShellProcesses.get(scopeKey);
+      if (!scopeSet) return;
+      scopeSet.delete(child);
+      if (scopeSet.size === 0) {
+        activeBuiltInShellProcesses.delete(scopeKey);
+      }
+    };
+
+    if (scopeKey) {
+      if (!activeBuiltInShellProcesses.has(scopeKey)) {
+        activeBuiltInShellProcesses.set(scopeKey, new Set());
+      }
+      activeBuiltInShellProcesses.get(scopeKey).add(child);
+    }
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed) {
-          child.kill("SIGKILL");
-        }
-      }, 1000).unref?.();
+      terminateChildProcess(child);
     }, timeoutMs);
+
+    const handleAbort = () => {
+      aborted = true;
+      terminateChildProcess(child);
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        handleAbort();
+      } else {
+        abortSignal.addEventListener("abort", handleAbort, { once: true });
+      }
+    }
 
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
@@ -152,6 +222,10 @@ export async function executeBuiltInShellTool(args = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (abortSignal) {
+        abortSignal.removeEventListener?.("abort", handleAbort);
+      }
+      finalizeScopeTracking();
       reject(error);
     });
 
@@ -159,12 +233,17 @@ export async function executeBuiltInShellTool(args = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (abortSignal) {
+        abortSignal.removeEventListener?.("abort", handleAbort);
+      }
+      finalizeScopeTracking();
       resolve({
         code: Number.isInteger(code) ? code : null,
         signal: signal || null,
         stdout,
         stderr,
         timedOut,
+        aborted,
       });
     });
   });
@@ -174,6 +253,7 @@ export async function executeBuiltInShellTool(args = {}) {
     `CWD: ${cwd}`,
     `Timeout(ms): ${timeoutMs}`,
     `Timed out: ${result.timedOut ? "yes" : "no"}`,
+    `Aborted: ${result.aborted ? "yes" : "no"}`,
     `Exit code: ${result.code === null ? "null" : result.code}`,
   ];
 
@@ -198,6 +278,7 @@ export async function executeBuiltInShellTool(args = {}) {
       cwd,
       timeout_ms: timeoutMs,
       timed_out: result.timedOut,
+      aborted: result.aborted,
       exit_code: result.code,
       signal: result.signal,
       stdout: truncateShellOutput(result.stdout),
@@ -249,7 +330,7 @@ export async function getConnectedMcpClient(serverConfig) {
 
         // Stdio doesn't natively support headers/auth in the same way as SSE,
         // but we can inject them as environment variables if needed.
-        const env = { ...process.env };
+        const env = { ...getShellEnv() };
         if (serverConfig.env) {
           Object.entries(serverConfig.env).forEach(([k, v]) => {
             env[k] = String(v ?? "");
@@ -376,12 +457,12 @@ export async function getAllAvailableTools(uid) {
 /**
  * Execute a specific tool on its associated MCP server.
  */
-export async function executeMcpTool(uid, serverId, toolName, args) {
+export async function executeMcpTool(uid, serverId, toolName, args, options = {}) {
   if (
     serverId === BUILTIN_SHELL_SERVER_ID &&
     String(toolName || "") === BUILTIN_SHELL_TOOL_NAME
   ) {
-    return executeBuiltInShellTool(args);
+    return executeBuiltInShellTool(args, options);
   }
 
   const servers = listMcpServers(uid);

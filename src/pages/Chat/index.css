@@ -585,6 +585,17 @@
   margin-bottom: 10px;
 }
 
+.tool-message-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.tool-message-controls .ant-btn {
+  padding-inline: 0;
+  font-size: 12px;
+}
+
 .tool-message-name {
   font-size: 13px;
   font-weight: 700;

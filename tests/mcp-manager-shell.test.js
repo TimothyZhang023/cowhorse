@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createUser } from "../server/models/database.js";
 import {
   BUILTIN_SHELL_TOOL_NAME,
+  abortBuiltInShellExecutions,
   executeBuiltInShellTool,
   getAllAvailableTools,
 } from "../server/models/mcpManager.js";
@@ -29,5 +30,55 @@ describe("built-in shell tool", () => {
     expect(text).toContain("STDOUT:");
     expect(text).toContain("hello-shell");
     expect(text).toContain(`CWD: ${process.cwd()}`);
+  });
+
+  it("aborts shell execution via abort signal", async () => {
+    const controller = new AbortController();
+    const runPromise = executeBuiltInShellTool(
+      {
+        command: "sleep 3; echo should-not-print",
+        timeout_ms: 10000,
+      },
+      {
+        signal: controller.signal,
+        executionScope: {
+          uid: `shell_abort_${Date.now()}`,
+          conversationId: "conv-abort-signal",
+        },
+      }
+    );
+
+    setTimeout(() => {
+      controller.abort("manual-stop");
+    }, 120);
+
+    const result = await runPromise;
+    const text = String(result.content?.[0]?.text || "");
+    expect(text).toContain("Aborted: yes");
+  });
+
+  it("aborts shell execution by scope kill", async () => {
+    const scope = {
+      uid: `shell_scope_${Date.now()}`,
+      conversationId: "conv-scope-kill",
+    };
+    const runPromise = executeBuiltInShellTool(
+      {
+        command: "sleep 4; echo should-not-print",
+        timeout_ms: 12000,
+      },
+      {
+        executionScope: scope,
+      }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const killed = abortBuiltInShellExecutions(scope);
+    expect(killed).toBeGreaterThan(0);
+
+    const result = await runPromise;
+    const text = String(result.content?.[0]?.text || "");
+    expect(text).toContain("Aborted: no");
+    expect(text).toContain("Signal: SIG");
   });
 });

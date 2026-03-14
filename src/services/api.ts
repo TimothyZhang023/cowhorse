@@ -111,6 +111,15 @@ export async function getMessages(conversationId: string) {
   );
 }
 
+export async function stopConversationExecution(conversationId: string) {
+  return request<{ success: boolean; stopped: boolean; killed_commands?: number }>(
+    `/api/conversations/${conversationId}/stop`,
+    {
+      method: "POST",
+    }
+  );
+}
+
 // Chat stream is handled differently due to SSE, but we can have a helper if needed.
 // Usually handled directly in component for stream reading.
 

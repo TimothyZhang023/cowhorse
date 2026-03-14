@@ -28,9 +28,10 @@ import {
   mergeGenerationConfig,
   resolveEndpointModelPair,
 } from "../utils/modelSelection.js";
+import { getTaskConfig } from "../utils/systemConfig.js";
 
-const MAX_TURNS = 10;
-const MAX_TOOL_CALLS_PER_SIGNATURE = 2;
+const DEFAULT_MAX_TURNS = 100;
+const DEFAULT_MAX_TOOL_CALLS_PER_SIGNATURE = 100;
 const RECENT_MESSAGES_TO_KEEP = 8;
 
 function sortJsonValue(value) {
@@ -69,7 +70,7 @@ export function getToolCallSignature(toolCall) {
 export function registerToolCall(
   toolCallCounts,
   toolCall,
-  maxCalls = MAX_TOOL_CALLS_PER_SIGNATURE
+  maxCalls = DEFAULT_MAX_TOOL_CALLS_PER_SIGNATURE
 ) {
   const signature = getToolCallSignature(toolCall);
   const count = (toolCallCounts.get(signature) || 0) + 1;
@@ -448,9 +449,14 @@ async function executePreparedTaskRun(execution) {
   let finalResponse = "";
   let finalResponsePersisted = false;
   const toolCallCounts = new Map();
+  const taskConfig = getTaskConfig(uid);
+  const maxTurns = Number(taskConfig?.max_turns) || DEFAULT_MAX_TURNS;
+  const maxToolCallsPerSignature =
+    Number(taskConfig?.max_tool_calls_per_signature) ||
+    DEFAULT_MAX_TOOL_CALLS_PER_SIGNATURE;
 
   try {
-    while (turnCount < MAX_TURNS) {
+    while (turnCount < maxTurns) {
       turnCount++;
       logger.info(
         { uid, taskId, turn: turnCount },
@@ -556,9 +562,13 @@ async function executePreparedTaskRun(execution) {
         let shouldForceSummary = false;
 
         for (const toolCall of aiMsg.tool_calls) {
-          const budgetState = registerToolCall(toolCallCounts, toolCall);
+          const budgetState = registerToolCall(
+            toolCallCounts,
+            toolCall,
+            maxToolCallsPerSignature
+          );
           if (budgetState.overBudget) {
-            const budgetMsg = `Skipped duplicate tool call for ${toolCall.function.name}: identical input exceeded budget (${MAX_TOOL_CALLS_PER_SIGNATURE}). Use previous tool results and provide the final answer.`;
+            const budgetMsg = `Skipped duplicate tool call for ${toolCall.function.name}: identical input exceeded budget (${maxToolCallsPerSignature}). Use previous tool results and provide the final answer.`;
             messages.push({
               role: "tool",
               tool_call_id: toolCall.id,
@@ -676,7 +686,7 @@ async function executePreparedTaskRun(execution) {
             uid,
             conversationId,
             endpointName: ep.name,
-            reason: `检测到重复工具调用，单工具同参预算为 ${MAX_TOOL_CALLS_PER_SIGNATURE} 次。`,
+            reason: `检测到重复工具调用，单工具同参预算为 ${maxToolCallsPerSignature} 次。`,
             runId,
           });
           addMessage(conversationId, uid, "assistant", finalResponse);
@@ -714,7 +724,7 @@ async function executePreparedTaskRun(execution) {
         uid,
         conversationId,
         endpointName: ep.name,
-        reason: `已达到最大执行轮数 ${MAX_TURNS}，停止继续调用工具。`,
+        reason: `已达到最大执行轮数 ${maxTurns}，停止继续调用工具。`,
         runId,
       }).catch((error) => {
         logger.error(

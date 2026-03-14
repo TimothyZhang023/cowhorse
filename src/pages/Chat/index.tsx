@@ -7,6 +7,7 @@ import {
   deleteConversation,
   getConversations,
   getMessages,
+  stopConversationExecution,
   summarizeConversationTitle,
   updateConversation,
 } from "@/services/api";
@@ -95,6 +96,14 @@ const getToolMessageStatus = (
   return "success";
 };
 
+const getToolMessagePreview = (content: string, maxLength = 240): string => {
+  const normalized = extractDisplayContent(String(content || ""));
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}\n...`;
+};
+
 const STREAM_FLUSH_INTERVAL = 16;
 const STREAM_SEGMENT_DRAIN_INTERVAL = 20;
 const TITLE_REFRESH_DELAYS = [1200, 2600, 5000, 9000];
@@ -171,6 +180,9 @@ export default () => {
   const [conversations, setConversations] = useState<API.Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<API.Message[]>([]);
+  const [toolMessageExpanded, setToolMessageExpanded] = useState<
+    Record<string, boolean>
+  >({});
 
   // 输入状态
   const [inputText, setInputText] = useState("");
@@ -274,6 +286,7 @@ export default () => {
       setConversations([]);
       setCurrentConvId(null);
       setMessages([]);
+      setToolMessageExpanded({});
       setSearchQuery("");
       setDebugEventsByConversation({});
     };
@@ -568,6 +581,7 @@ export default () => {
 
   const handleSelectConversation = async (id: string) => {
     setCurrentConvId(id);
+    setToolMessageExpanded({});
     try {
       const msgs = await getMessages(id);
       setMessages(msgs);
@@ -1064,7 +1078,26 @@ export default () => {
   };
 
   const handleStop = () => {
+    const convId = currentConvId;
+    if (convId) {
+      stopConversationExecution(convId).catch((error) => {
+        console.error(error);
+      });
+    }
     abortControllerRef.current?.abort();
+    setLoading(false);
+  };
+
+  const getToolMessageKey = (msg: API.Message, idx: number) => {
+    if (msg.id) return `tool-${msg.id}`;
+    return `tool-${idx}-${getToolMessageName(msg)}`;
+  };
+
+  const handleToggleToolMessage = (key: string) => {
+    setToolMessageExpanded((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
   };
 
   const handleCopyMessage = (content: string) => {
@@ -1328,6 +1361,20 @@ export default () => {
                   </Button>
                 </Tooltip>
               )}
+              {currentConvId && (
+                <Tooltip title="立即终止当前会话与工具执行">
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    icon={<StopOutlined />}
+                    onClick={handleStop}
+                    disabled={!loading}
+                  >
+                    一键停机
+                  </Button>
+                </Tooltip>
+              )}
             </div>
             <div className="header-right">
               {isMobile && (
@@ -1418,27 +1465,43 @@ export default () => {
                             )}
                           </div>
                         ) : msg.role === "tool" ? (
-                          <div
-                            className={`tool-message-card ${getToolMessageStatus(
-                              msg
-                            )}`}
-                          >
-                            <div className="tool-message-header">
-                              <span className="tool-message-name">
-                                {getToolMessageName(msg)}
-                              </span>
-                              <span className="tool-message-status">
-                                {getToolMessageStatus(msg) === "running"
-                                  ? "运行中"
-                                  : getToolMessageStatus(msg) === "error"
-                                  ? "失败"
-                                  : "完成"}
-                              </span>
-                            </div>
-                            <pre className="tool-message-body">
-                              {extractDisplayContent(msg.content)}
-                            </pre>
-                          </div>
+                          (() => {
+                            const status = getToolMessageStatus(msg);
+                            const messageKey = getToolMessageKey(msg, idx);
+                            const isExpanded =
+                              status === "running" || toolMessageExpanded[messageKey];
+                            const fullContent = extractDisplayContent(msg.content);
+                            return (
+                              <div className={`tool-message-card ${status}`}>
+                                <div className="tool-message-header">
+                                  <span className="tool-message-name">
+                                    {getToolMessageName(msg)}
+                                  </span>
+                                  <span className="tool-message-status">
+                                    {status === "running"
+                                      ? "运行中"
+                                      : status === "error"
+                                        ? "失败"
+                                        : "完成"}
+                                  </span>
+                                </div>
+                                <div className="tool-message-controls">
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    onClick={() => handleToggleToolMessage(messageKey)}
+                                  >
+                                    {isExpanded ? "收起输出" : "展开输出"}
+                                  </Button>
+                                </div>
+                                <pre className="tool-message-body">
+                                  {isExpanded
+                                    ? fullContent
+                                    : getToolMessagePreview(fullContent)}
+                                </pre>
+                              </div>
+                            );
+                          })()
                         ) : (
                           <div
                             className={
@@ -1664,19 +1727,29 @@ export default () => {
               <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
                 当前对话已记录 {currentDebugEvents.length} 条调试事件
               </div>
-              <Button
-                size="small"
-                onClick={() => {
-                  if (!currentConvId) return;
-                  setDebugEventsByConversation((prev) => ({
-                    ...prev,
-                    [currentConvId]: [],
-                  }));
-                }}
-                disabled={!currentConvId || currentDebugEvents.length === 0}
-              >
-                清空
-              </Button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Button
+                  size="small"
+                  danger
+                  onClick={handleStop}
+                  disabled={!loading || !currentConvId}
+                >
+                  一键停机
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    if (!currentConvId) return;
+                    setDebugEventsByConversation((prev) => ({
+                      ...prev,
+                      [currentConvId]: [],
+                    }));
+                  }}
+                  disabled={!currentConvId || currentDebugEvents.length === 0}
+                >
+                  清空
+                </Button>
+              </div>
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>

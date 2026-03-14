@@ -1,14 +1,18 @@
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { decrypt, encrypt } from "../utils/crypto.js";
 import { createDatabaseClient } from "./dbClient.js";
 
-const dataDir = join(os.homedir(), ".workhorse");
+const dataDir = process.env.WORKHORSE_DATA_DIR || join(os.homedir(), ".workhorse");
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
+}
+const modelsDir = join(dataDir, "models");
+if (!fs.existsSync(modelsDir)) {
+  fs.mkdirSync(modelsDir, { recursive: true });
 }
 
 const dbPath = process.env.DB_PATH || join(dataDir, "chat.db");
@@ -950,11 +954,80 @@ export function deleteEndpointGroup(id, uid) {
     id,
     uid
   );
+  try {
+    const filePath = getModelConfigFilePath(id);
+    if (fs.existsSync(filePath)) {
+      fs.rmSync(filePath, { force: true });
+    }
+  } catch {
+    // ignore model file cleanup failure
+  }
 }
 
 // ============ 模型管理 ============
 
-export function getModels(endpointGroupId, uid) {
+function getModelConfigFilePath(endpointGroupId) {
+  return join(modelsDir, `endpoint-${Number(endpointGroupId)}.json`);
+}
+
+function normalizeStoredModel(rawModel = {}, fallbackId = 0) {
+  const parsedId = Number(rawModel?.id);
+  const id = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : fallbackId;
+
+  return {
+    id,
+    model_id: String(rawModel?.model_id || "").trim(),
+    display_name: String(
+      rawModel?.display_name || rawModel?.model_id || `Model ${id}`
+    ).trim(),
+    is_enabled: Number(rawModel?.is_enabled) === 1 ? 1 : 0,
+    source: String(rawModel?.source || "manual").trim() || "manual",
+    generation_config:
+      rawModel?.generation_config &&
+      typeof rawModel.generation_config === "object" &&
+      !Array.isArray(rawModel.generation_config)
+        ? rawModel.generation_config
+        : {},
+  };
+}
+
+function readModelConfigFile(endpointGroupId) {
+  const filePath = getModelConfigFilePath(endpointGroupId);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const models = Array.isArray(payload?.models) ? payload.models : [];
+    return {
+      ...payload,
+      models: models
+        .map((item, index) => normalizeStoredModel(item, index + 1))
+        .filter((item) => item.model_id),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeModelConfigFile(endpointGroupId, uid, models = []) {
+  const filePath = getModelConfigFilePath(endpointGroupId);
+  const normalizedModels = models
+    .map((item, index) => normalizeStoredModel(item, index + 1))
+    .filter((item) => item.model_id);
+  const payload = {
+    version: 1,
+    uid: String(uid || "").trim(),
+    endpoint_group_id: Number(endpointGroupId),
+    updated_at: new Date().toISOString(),
+    models: normalizedModels,
+  };
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+  return normalizedModels;
+}
+
+function loadModelsFromDatabaseLegacy(endpointGroupId, uid) {
   return db
     .prepare(
       `
@@ -964,11 +1037,103 @@ export function getModels(endpointGroupId, uid) {
   `
     )
     .all(endpointGroupId, uid)
-    .map((model) => ({
-      ...model,
-      source: model.source || "remote",
-      generation_config: parseJsonObject(model.generation_config, {}),
-    }));
+    .map((model) =>
+      normalizeStoredModel(
+        {
+          ...model,
+          source: model.source || "remote",
+          generation_config: parseJsonObject(model.generation_config, {}),
+        },
+        Number(model.id)
+      )
+    )
+    .filter((item) => item.model_id);
+}
+
+function loadModelsFromStore(endpointGroupId, uid) {
+  const fromFile = readModelConfigFile(endpointGroupId);
+  if (fromFile && String(fromFile.uid || "") === String(uid || "")) {
+    return fromFile.models;
+  }
+
+  const legacyModels = loadModelsFromDatabaseLegacy(endpointGroupId, uid);
+  if (legacyModels.length > 0) {
+    return writeModelConfigFile(endpointGroupId, uid, legacyModels);
+  }
+
+  return [];
+}
+
+function findModelRecordById(uid, id) {
+  const numericId = Number(id);
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    return null;
+  }
+
+  const files = fs
+    .readdirSync(modelsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => join(modelsDir, entry.name));
+
+  for (const filePath of files) {
+    try {
+      const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (String(payload?.uid || "") !== String(uid || "")) {
+        continue;
+      }
+      const endpointGroupId =
+        Number(payload?.endpoint_group_id) ||
+        Number(
+          String(basename(filePath)).replace(/^endpoint-/, "").replace(/\.json$/, "")
+        );
+      const models = Array.isArray(payload?.models) ? payload.models : [];
+      const index = models.findIndex((item) => Number(item?.id) === numericId);
+      if (index >= 0) {
+        return {
+          endpointGroupId,
+          models: models.map((item, idx) => normalizeStoredModel(item, idx + 1)),
+          index,
+        };
+      }
+    } catch {
+      // ignore malformed model files
+    }
+  }
+
+  return null;
+}
+
+function getAllModelFiles() {
+  return fs
+    .readdirSync(modelsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => join(modelsDir, entry.name));
+}
+
+function allocateNextModelId(uid) {
+  let maxId = 0;
+  for (const filePath of getAllModelFiles()) {
+    try {
+      const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (String(payload?.uid || "") !== String(uid || "")) {
+        continue;
+      }
+      const models = Array.isArray(payload?.models) ? payload.models : [];
+      for (const model of models) {
+        const currentId = Number(model?.id);
+        if (Number.isInteger(currentId) && currentId > maxId) {
+          maxId = currentId;
+        }
+      }
+    } catch {
+      // ignore malformed model files
+    }
+  }
+  return maxId + 1;
+}
+
+export function getModels(endpointGroupId, uid) {
+  return loadModelsFromStore(endpointGroupId, uid);
 }
 
 export function addModel(
@@ -983,89 +1148,67 @@ export function addModel(
     source = "manual",
     generation_config = {},
   } = options || {};
-  const result = db
-    .prepare(
-      `
-    INSERT INTO models (
-      endpoint_group_id,
-      uid,
-      model_id,
-      display_name,
-      is_enabled,
-      source,
-      generation_config
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `
-    )
-    .run(
-      endpointGroupId,
-      uid,
-      modelId,
-      displayName,
-      is_enabled ? 1 : 0,
-      source || "manual",
-      JSON.stringify(generation_config || {})
-    );
+  const existing = loadModelsFromStore(endpointGroupId, uid);
+  const nextId = allocateNextModelId(uid);
+  const nextModel = normalizeStoredModel(
+    {
+      id: nextId,
+      model_id: modelId,
+      display_name: displayName,
+      is_enabled: is_enabled ? 1 : 0,
+      source: source || "manual",
+      generation_config: generation_config || {},
+    },
+    nextId
+  );
+  const nextModels = [...existing, nextModel];
+  writeModelConfigFile(endpointGroupId, uid, nextModels);
+
   return {
-    id: result.lastInsertRowid,
-    model_id: modelId,
-    display_name: displayName,
-    is_enabled: is_enabled ? 1 : 0,
-    source: source || "manual",
-    generation_config: generation_config || {},
+    ...nextModel,
   };
 }
 
 export function replaceModels(endpointGroupId, uid, models) {
-  const deleteRemoteStmt = db.prepare(
-    "DELETE FROM models WHERE endpoint_group_id = ? AND uid = ? AND COALESCE(source, 'remote') = 'remote'"
+  const existing = loadModelsFromStore(endpointGroupId, uid);
+  const existingManualModels = existing.filter(
+    (item) => String(item.source || "manual") !== "remote"
   );
-  const insertStmt = db.prepare(
-    `
-    INSERT INTO models (
-      endpoint_group_id,
-      uid,
-      model_id,
-      display_name,
-      is_enabled,
-      source,
-      generation_config
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `
+  const existingRemoteByModelId = new Map(
+    existing
+      .filter((item) => String(item.source || "manual") === "remote")
+      .map((item) => [String(item.model_id), item])
   );
-
-  const tx = db.transaction((items) => {
-    deleteRemoteStmt.run(endpointGroupId, uid);
-    for (const item of items) {
-      insertStmt.run(
-        endpointGroupId,
-        uid,
-        item.model_id,
-        item.display_name || item.model_id,
-        item.is_enabled ? 1 : 0,
-        item.source || "remote",
-        JSON.stringify(item.generation_config || {})
+  let nextId = allocateNextModelId(uid);
+  const incoming = Array.isArray(models) ? models : [];
+  const nextRemoteModels = incoming
+    .map((item) => {
+      const normalizedModelId = String(item?.model_id || "").trim();
+      const existingRemote = existingRemoteByModelId.get(normalizedModelId);
+      const normalized = normalizeStoredModel(
+        {
+          ...item,
+          id: Number(existingRemote?.id) > 0 ? Number(existingRemote.id) : nextId++,
+          source: item?.source || "remote",
+        },
+        nextId
       );
-    }
-  });
+      return normalized;
+    })
+    .filter((item) => item.model_id);
 
-  tx(models);
+  writeModelConfigFile(endpointGroupId, uid, [
+    ...existingManualModels,
+    ...nextRemoteModels,
+  ]);
 }
 
 export function updateModel(id, uid, updates = {}) {
-  const current = db
-    .prepare(
-      `
-    SELECT *
-    FROM models
-    WHERE id = ? AND uid = ?
-  `
-    )
-    .get(id, uid);
-
-  if (!current) {
+  const record = findModelRecordById(uid, id);
+  if (!record) {
     throw new Error("Model not found");
   }
+  const current = record.models[record.index];
 
   const nextModelId =
     updates.model_id !== undefined ? updates.model_id : current.model_id;
@@ -1080,23 +1223,21 @@ export function updateModel(id, uid, updates = {}) {
   const nextGenerationConfig =
     updates.generation_config !== undefined
       ? updates.generation_config
-      : parseJsonObject(current.generation_config, {});
+      : current.generation_config || {};
 
-  db.prepare(
-    `
-    UPDATE models
-    SET model_id = ?, display_name = ?, is_enabled = ?, source = ?, generation_config = ?
-    WHERE id = ? AND uid = ?
-  `
-  ).run(
-    nextModelId,
-    nextDisplayName,
-    nextIsEnabled ? 1 : 0,
-    nextSource || "manual",
-    JSON.stringify(nextGenerationConfig || {}),
-    id,
-    uid
+  record.models[record.index] = normalizeStoredModel(
+    {
+      id: current.id,
+      model_id: nextModelId,
+      display_name: nextDisplayName,
+      is_enabled: nextIsEnabled ? 1 : 0,
+      source: nextSource || "manual",
+      generation_config: nextGenerationConfig || {},
+    },
+    current.id
   );
+
+  writeModelConfigFile(record.endpointGroupId, uid, record.models);
 }
 
 export function updateModelsEnabled(endpointGroupId, uid, modelIds = [], isEnabled = 0) {
@@ -1112,22 +1253,31 @@ export function updateModelsEnabled(endpointGroupId, uid, modelIds = [], isEnabl
     return { updated: 0 };
   }
 
-  const placeholders = normalizedIds.map(() => "?").join(",");
-  const result = db
-    .prepare(
-      `
-    UPDATE models
-    SET is_enabled = ?
-    WHERE endpoint_group_id = ? AND uid = ? AND id IN (${placeholders})
-  `
-    )
-    .run(isEnabled ? 1 : 0, endpointGroupId, uid, ...normalizedIds);
+  const existing = loadModelsFromStore(endpointGroupId, uid);
+  let updated = 0;
+  const nextModels = existing.map((item) => {
+    if (!normalizedIds.includes(Number(item.id))) {
+      return item;
+    }
+    if (Number(item.is_enabled) === (isEnabled ? 1 : 0)) {
+      return item;
+    }
+    updated += 1;
+    return {
+      ...item,
+      is_enabled: isEnabled ? 1 : 0,
+    };
+  });
 
-  return { updated: result.changes };
+  writeModelConfigFile(endpointGroupId, uid, nextModels);
+  return { updated };
 }
 
 export function deleteModel(id, uid) {
-  db.prepare("DELETE FROM models WHERE id = ? AND uid = ?").run(id, uid);
+  const record = findModelRecordById(uid, id);
+  if (!record) return;
+  const nextModels = record.models.filter((item) => Number(item.id) !== Number(id));
+  writeModelConfigFile(record.endpointGroupId, uid, nextModels);
 }
 
 // ============ 用量统计 ============

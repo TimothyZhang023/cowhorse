@@ -1,13 +1,12 @@
 import {
   PRESET_MODELS,
-  getAppSetting,
   getEndpointGroups,
   getModels,
-  setAppSetting,
 } from "../models/database.js";
-
-export const GLOBAL_PRIMARY_MODEL_KEY = "global_primary_model";
-export const GLOBAL_FALLBACK_MODELS_KEY = "global_fallback_models";
+import {
+  getModelPolicyConfig,
+  updateModelPolicyConfig,
+} from "./systemConfig.js";
 
 function sortEndpointsWithoutDefaultBias(endpoints = []) {
   return [...(Array.isArray(endpoints) ? endpoints : [])].sort((a, b) => {
@@ -35,28 +34,12 @@ function normalizeModelList(value) {
   );
 }
 
-function parseJsonArray(rawValue) {
-  if (!rawValue) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue);
-    return normalizeModelList(parsed);
-  } catch {
-    return [];
-  }
-}
-
 export function getGlobalModelSettings(uid) {
   try {
+    const policy = getModelPolicyConfig(uid);
     return {
-      primary_model: normalizeModelId(
-        getAppSetting(uid, GLOBAL_PRIMARY_MODEL_KEY, "")
-      ),
-      fallback_models: parseJsonArray(
-        getAppSetting(uid, GLOBAL_FALLBACK_MODELS_KEY, "[]")
-      ),
+      primary_model: normalizeModelId(policy?.primary_model),
+      fallback_models: normalizeModelList(policy?.fallback_models),
     };
   } catch {
     return {
@@ -75,12 +58,10 @@ export function saveGlobalModelSettings(
     (modelId) => modelId !== normalizedPrimaryModel
   );
 
-  setAppSetting(uid, GLOBAL_PRIMARY_MODEL_KEY, normalizedPrimaryModel);
-  setAppSetting(
-    uid,
-    GLOBAL_FALLBACK_MODELS_KEY,
-    JSON.stringify(normalizedFallbackModels)
-  );
+  updateModelPolicyConfig(uid, {
+    primary_model: normalizedPrimaryModel,
+    fallback_models: normalizedFallbackModels,
+  });
 
   return {
     primary_model: normalizedPrimaryModel,

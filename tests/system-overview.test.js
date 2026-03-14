@@ -24,7 +24,9 @@ describe("system overview route", () => {
     expect(Array.isArray(res.body.recommendations)).toBe(true);
     expect(Array.isArray(res.body.health?.commands)).toBe(true);
     expect(
-      res.body.health.commands.some((item) => ["python", "python3"].includes(item.name))
+      res.body.health.commands.some((item) =>
+        ["python", "python3", "Python"].includes(item.name)
+      )
     ).toBe(true);
   });
 
