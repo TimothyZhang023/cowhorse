@@ -8,7 +8,11 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
-const SKILL_SOURCE_ROOT = join(process.cwd(), "data", "skill-sources");
+const SKILL_SOURCE_ROOT = join(
+  process.env.WORKHORSE_APP_DATA_DIR || process.cwd(),
+  "data",
+  "skill-sources"
+);
 const IGNORED_DIRECTORIES = new Set([
   ".git",
   ".github",

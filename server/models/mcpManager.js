@@ -27,7 +27,8 @@ function truncateShellOutput(value, maxLength = BUILTIN_SHELL_MAX_OUTPUT_CHARS) 
 }
 
 function resolveShellWorkingDirectory(inputCwd) {
-  const workspaceRoot = process.cwd();
+  const workspaceRoot =
+    process.env.WORKHORSE_WORKSPACE_ROOT || process.cwd();
   const rawCwd = String(inputCwd || "").trim();
 
   if (!rawCwd) {

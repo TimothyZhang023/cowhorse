@@ -1,75 +1,211 @@
-import { execSync } from 'node:child_process';
-import { copyFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, realpathSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import process from "node:process";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
-const tauriDir = join(rootDir, 'src-tauri');
-const sidecarDir = join(tauriDir, 'sidecar');
+const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+const runtimeDir = path.join(repoRoot, "src-tauri", "sidecar-runtime");
+const runtimeNodeSource = path.join(repoRoot, "src-tauri", "sidecar-node", "node");
+const serverEntrySource = path.join(repoRoot, "server.js");
+const serverSourceDir = path.join(repoRoot, "server");
 
-function run(command) {
-    console.log(`Running: ${command}`);
-    execSync(command, { stdio: 'inherit', cwd: rootDir });
+const runtimeDependencyNames = [
+  "@modelcontextprotocol/sdk",
+  "better-sqlite3",
+  "cookie-parser",
+  "cors",
+  "cron-parser",
+  "dotenv",
+  "express",
+  "express-rate-limit",
+  "http-proxy-middleware",
+  "jsonwebtoken",
+  "node-cron",
+  "openai",
+  "pino",
+  "pino-http",
+  "pino-pretty",
+  "pptxgenjs",
+];
+
+function resolveExistingPath(candidates) {
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
-async function build() {
-    if (!existsSync(sidecarDir)) {
-        mkdirSync(sidecarDir, { recursive: true });
-    }
+async function runCommand(command, args, options = {}) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: "inherit",
+      ...options,
+    });
 
-    // 1. Bundle server
-    console.log('Bundling server with ncc...');
-    run('npx ncc build server.js -o dist-server -m');
-    copyFileSync(join(rootDir, 'dist-server', 'index.js'), join(rootDir, 'dist-server.cjs'));
-
-    // 2. Generate SEA config dynamically
-    const seaConfig = {
-        main: "dist-server.cjs",
-        output: "sea-prep.blob",
-        disableExperimentalSEAWarning: true
-    };
-    writeFileSync(join(rootDir, 'sea-config.json'), JSON.stringify(seaConfig, null, 2));
-
-    // 3. Generate SEA blob
-    console.log('Generating SEA blob...');
-    run('node --experimental-sea-config sea-config.json');
-
-    // 4. Create the executable
-    // Use realpath to ensure we are not copying a symlink
-    const nodePath = realpathSync(process.execPath);
-    const targetTriple = execSync('rustc -Vv | grep host | cut -d " " -f 2', { encoding: 'utf8' }).trim();
-    const binaryName = `workhorse-server-${targetTriple}${process.platform === 'win32' ? '.exe' : ''}`;
-    const outputPath = join(sidecarDir, binaryName);
-
-    console.log(`Creating sidecar binary: ${binaryName}`);
-    copyFileSync(nodePath, outputPath);
-
-    // 5. Fix for macOS: Remove signature before injection
-    if (process.platform === 'darwin') {
-        console.log('Removing macOS binary signature for injection...');
-        try { execSync(`codesign --remove-signature ${outputPath}`); } catch (e) {
-            console.warn('Signature removal failed, might already be unsigned.');
-        }
-    }
-
-    // 6. Inject the blob
-    console.log('Injecting SEA blob...');
-    const fuse = "NODE_SEA_FUSE_f14658410194511a1228e3d92fb9b00c";
-    let postjectCmd = `npx postject ${outputPath} NODE_SEA_BLOB sea-prep.blob --sentinel-fuse ${fuse}`;
-    if (process.platform === 'darwin') {
-        postjectCmd += ' --macho-segment-name NODE_SEA';
-    }
-    run(postjectCmd);
-
-    if (process.platform !== 'win32') {
-        chmodSync(outputPath, 0o755);
-    }
-
-    console.log('Sidecar build complete!');
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${command} exited with code ${code}`));
+    });
+  });
 }
 
-build().catch(err => {
-    console.error('Build failed:', err);
-    process.exit(1);
+async function copyDirectory(sourceDir, targetDir) {
+  await fsp.mkdir(targetDir, { recursive: true });
+  const entries = await fsp.readdir(sourceDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      await copyDirectory(sourcePath, targetPath);
+      continue;
+    }
+
+    await fsp.copyFile(sourcePath, targetPath);
+  }
+}
+
+async function main() {
+  if (!fs.existsSync(runtimeNodeSource)) {
+    throw new Error(`Missing packaged Node runtime: ${runtimeNodeSource}`);
+  }
+
+  const npmRootOutput = [];
+  await new Promise((resolve, reject) => {
+    const child = spawn("npm", ["root", "-g"], {
+      cwd: repoRoot,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+
+    child.stdout.on("data", (chunk) => {
+      npmRootOutput.push(String(chunk));
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`npm root -g exited with code ${code}`));
+    });
+  });
+
+  const npmGlobalRoot = npmRootOutput.join("").trim();
+  const npmCliPath = resolveExistingPath([
+    path.join(npmGlobalRoot, "npm", "bin", "npm-cli.js"),
+    "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+    "/opt/homebrew/lib/node_modules/npm/bin/npm-cli.js",
+  ]);
+  const nodeGypPath = resolveExistingPath([
+    path.join(npmGlobalRoot, "npm", "node_modules", "node-gyp", "bin", "node-gyp.js"),
+    "/usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js",
+    "/opt/homebrew/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js",
+  ]);
+
+  if (!npmCliPath) {
+    throw new Error("Unable to locate npm-cli.js for sidecar runtime build");
+  }
+
+  if (!nodeGypPath) {
+    throw new Error("Unable to locate node-gyp.js for sidecar runtime build");
+  }
+
+  const rootPackagePath = path.join(repoRoot, "package.json");
+  const rootPackage = JSON.parse(await fsp.readFile(rootPackagePath, "utf8"));
+  const runtimeDependencies = {};
+
+  for (const dependencyName of runtimeDependencyNames) {
+    const version = rootPackage.dependencies?.[dependencyName];
+    if (!version) {
+      throw new Error(`Missing runtime dependency version for ${dependencyName}`);
+    }
+    runtimeDependencies[dependencyName] = version;
+  }
+
+  await fsp.rm(runtimeDir, { recursive: true, force: true });
+  await fsp.mkdir(runtimeDir, { recursive: true });
+
+  await fsp.copyFile(runtimeNodeSource, path.join(runtimeDir, "node"));
+  await fsp.copyFile(serverEntrySource, path.join(runtimeDir, "server.js"));
+  await copyDirectory(serverSourceDir, path.join(runtimeDir, "server"));
+
+  const runtimePackageJson = {
+    name: "workhorse-sidecar-runtime",
+    private: true,
+    type: "module",
+    dependencies: runtimeDependencies,
+  };
+
+  await fsp.writeFile(
+    path.join(runtimeDir, "package.json"),
+    `${JSON.stringify(runtimePackageJson, null, 2)}\n`,
+    "utf8"
+  );
+
+  const wrapperScript = `#!/bin/bash
+set -euo pipefail
+DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" && pwd )"
+export PORT="\${PORT:-12621}"
+export NODE_ENV="\${NODE_ENV:-production}"
+cd "$DIR"
+exec "$DIR/node" "$DIR/server.js" "$@"
+`;
+
+  const wrapperPath = path.join(runtimeDir, "workhorse-server");
+  await fsp.writeFile(wrapperPath, wrapperScript, "utf8");
+  await fsp.chmod(wrapperPath, 0o755);
+  await fsp.chmod(path.join(runtimeDir, "node"), 0o755);
+
+  await runCommand(
+    runtimeNodeSource,
+    [
+      npmCliPath,
+      "install",
+      "--omit=dev",
+      "--no-package-lock",
+      "--audit=false",
+      "--fund=false",
+      "--prefix",
+      runtimeDir,
+    ],
+    {
+      cwd: repoRoot,
+    }
+  );
+
+  const betterSqliteDir = path.join(runtimeDir, "node_modules", "better-sqlite3");
+  await fsp.rm(path.join(betterSqliteDir, "build"), { recursive: true, force: true });
+  await runCommand(runtimeNodeSource, [nodeGypPath, "rebuild", "--release"], {
+    cwd: betterSqliteDir,
+  });
+
+  await runCommand(
+    runtimeNodeSource,
+    [
+      "-e",
+      [
+        "const Database = require('better-sqlite3');",
+        "new Database(':memory:').prepare('select 1').get();",
+        "console.log('sidecar runtime verified');",
+      ].join(" "),
+    ],
+    {
+      cwd: runtimeDir,
+    }
+  );
+
+  console.log(`Built sidecar runtime at ${runtimeDir}`);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
 });

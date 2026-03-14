@@ -1,4 +1,10 @@
-use std::path::PathBuf;
+use std::{
+  fs,
+  net::{SocketAddr, TcpStream},
+  path::PathBuf,
+  thread,
+  time::{Duration, Instant},
+};
 
 use tauri::{LogicalSize, Manager, Size, WebviewWindow};
 use tauri_plugin_shell::ShellExt;
@@ -45,6 +51,25 @@ fn project_root() -> PathBuf {
     .to_path_buf()
 }
 
+fn wait_for_backend_ready(port: u16, timeout: Duration) -> tauri::Result<()> {
+  let deadline = Instant::now() + timeout;
+  let address: SocketAddr = format!("127.0.0.1:{port}")
+    .parse()
+    .expect("invalid backend address");
+
+  while Instant::now() < deadline {
+    if TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() {
+      return Ok(());
+    }
+
+    thread::sleep(Duration::from_millis(250));
+  }
+
+  Err(tauri::Error::AssetNotFound(format!(
+    "backend did not become ready on 127.0.0.1:{port}"
+  )))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -57,10 +82,8 @@ pub fn run() {
         )?;
       }
 
-      // Initialize shell plugin
       app.handle().plugin(tauri_plugin_shell::init())?;
 
-      // In `tauri dev`, use the current system Node so native addons match the local install.
       let sidecar = if cfg!(debug_assertions) {
         let repo_root = project_root();
         let server_entry = repo_root.join("server.js");
@@ -71,25 +94,46 @@ pub fn run() {
           .command(node_binary)
           .args([server_entry.to_string_lossy().into_owned()])
           .current_dir(repo_root)
+          .env("PORT", "12621")
       } else {
-        app
+        let resource_dir = app.path().resource_dir()?;
+        let runtime_dir = resource_dir.join("sidecar-runtime");
+        let launcher_path = runtime_dir.join("workhorse-server");
+        let app_data_dir = app.path().app_data_dir()?;
+        fs::create_dir_all(&app_data_dir)?;
+
+        let mut command = app
           .shell()
-          .sidecar("workhorse-server")
-          .expect("failed to create sidecar configuration")
+          .command(launcher_path.to_string_lossy().into_owned())
+          .current_dir(&app_data_dir)
+          .env("PORT", "12621")
+          .env("WORKHORSE_APP_DATA_DIR", app_data_dir.to_string_lossy().to_string());
+
+        if let Ok(home_dir) = app.path().home_dir() {
+          command = command.env(
+            "WORKHORSE_WORKSPACE_ROOT",
+            home_dir.to_string_lossy().to_string(),
+          );
+        }
+
+        command
       };
 
-      let (mut rx, _child) = sidecar.spawn()
-          .expect("failed to spawn workhorse-server sidecar");
+      let (mut rx, _child) = sidecar
+        .spawn()
+        .expect("failed to spawn workhorse-server sidecar");
 
-      // Optional: log sidecar output
+      wait_for_backend_ready(12621, Duration::from_secs(20))
+        .expect("failed to start backend sidecar");
+
       tauri::async_runtime::spawn(async move {
-          while let Some(event) = rx.recv().await {
-              if let tauri_plugin_shell::process::CommandEvent::Stdout(line) = event {
-                  println!("sidecar: {}", String::from_utf8_lossy(&line));
-              } else if let tauri_plugin_shell::process::CommandEvent::Stderr(line) = event {
-                  eprintln!("sidecar error: {}", String::from_utf8_lossy(&line));
-              }
+        while let Some(event) = rx.recv().await {
+          if let tauri_plugin_shell::process::CommandEvent::Stdout(line) = event {
+            println!("sidecar: {}", String::from_utf8_lossy(&line));
+          } else if let tauri_plugin_shell::process::CommandEvent::Stderr(line) = event {
+            eprintln!("sidecar error: {}", String::from_utf8_lossy(&line));
           }
+        }
       });
 
       if let Some(window) = app.get_webview_window("main") {
