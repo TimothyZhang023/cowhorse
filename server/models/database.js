@@ -14,6 +14,10 @@ const modelsDir = join(dataDir, "models");
 if (!fs.existsSync(modelsDir)) {
   fs.mkdirSync(modelsDir, { recursive: true });
 }
+const tmpDir = join(dataDir, "tmp");
+if (!fs.existsSync(tmpDir)) {
+  fs.mkdirSync(tmpDir, { recursive: true });
+}
 
 const dbPath = process.env.DB_PATH || join(dataDir, "chat.db");
 const db = createDatabaseClient({ dbPath });

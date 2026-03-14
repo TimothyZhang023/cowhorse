@@ -17,6 +17,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   CopyOutlined,
+  DownOutlined,
   DeleteOutlined,
   EditOutlined,
   MenuOutlined,
@@ -26,6 +27,7 @@ import {
   SendOutlined,
   StopOutlined,
   ToolOutlined,
+  UpOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -94,14 +96,6 @@ const getToolMessageStatus = (
   }
 
   return "success";
-};
-
-const getToolMessagePreview = (content: string, maxLength = 240): string => {
-  const normalized = extractDisplayContent(String(content || ""));
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLength)}\n...`;
 };
 
 const STREAM_FLUSH_INTERVAL = 16;
@@ -1487,17 +1481,21 @@ export default () => {
                                 </div>
                                 <div className="tool-message-controls">
                                   <Button
-                                    type="link"
+                                    type="text"
                                     size="small"
+                                    icon={isExpanded ? <UpOutlined /> : <DownOutlined />}
+                                    disabled={status === "running"}
                                     onClick={() => handleToggleToolMessage(messageKey)}
                                   >
                                     {isExpanded ? "收起输出" : "展开输出"}
                                   </Button>
                                 </div>
-                                <pre className="tool-message-body">
-                                  {isExpanded
-                                    ? fullContent
-                                    : getToolMessagePreview(fullContent)}
+                                <pre
+                                  className={`tool-message-body ${
+                                    isExpanded ? "expanded" : "collapsed"
+                                  }`}
+                                >
+                                  {fullContent}
                                 </pre>
                               </div>
                             );

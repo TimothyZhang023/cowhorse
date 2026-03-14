@@ -45,7 +45,7 @@ import {
   message,
   theme as antdTheme,
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import "../Dashboard/index.css";
 
 type TaskRunState = {
@@ -111,8 +111,11 @@ export default () => {
   } = useShellPreferences();
   const [loading, setLoading] = useState(false);
   const [tasks, setTasks] = useState<API.AgentTask[]>([]);
-  const [skills, setSkills] = useState<API.Skill[]>([]);
-  const [mcpServers, setMcpServers] = useState<API.McpServer[]>([]);
+  const [runtimeSnapshot, setRuntimeSnapshot] = useState<{
+    enabledSkills: number;
+    enabledMcpServers: number;
+    checkedAt: number;
+  } | null>(null);
   const [editingTask, setEditingTask] = useState<Partial<API.AgentTask> | null>(
     null
   );
@@ -131,14 +134,14 @@ export default () => {
   >([]);
   const [runEventsLoading, setRunEventsLoading] = useState(false);
 
-  const enabledSkills = useMemo(
-    () => skills.filter((skill) => Number(skill.is_enabled) === 1),
-    [skills]
-  );
-  const enabledMcpServers = useMemo(
-    () => mcpServers.filter((server) => Number(server.is_enabled) === 1),
-    [mcpServers]
-  );
+  const loadRuntimeSnapshot = async () => {
+    const [skillData, serverData] = await Promise.all([getSkills(), getMcpServers()]);
+    setRuntimeSnapshot({
+      enabledSkills: skillData.filter((skill) => Number(skill.is_enabled) === 1).length,
+      enabledMcpServers: serverData.filter((server) => Number(server.is_enabled) === 1).length,
+      checkedAt: Date.now(),
+    });
+  };
 
   const loadRuns = async () => {
     setRunsLoading(true);
@@ -155,14 +158,8 @@ export default () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [taskData, skillData, serverData] = await Promise.all([
-        getAgentTasks(),
-        getSkills(),
-        getMcpServers(),
-      ]);
+      const taskData = await getAgentTasks();
       setTasks(taskData);
-      setSkills(skillData);
-      setMcpServers(serverData);
     } catch {
       messageApi.error("加载数据失败");
     } finally {
@@ -173,12 +170,18 @@ export default () => {
   useEffect(() => {
     loadData();
     loadRuns();
+    loadRuntimeSnapshot().catch(() => undefined);
   }, []);
 
-  const openRunModal = (task: API.AgentTask) => {
+  const openRunModal = async (task: API.AgentTask) => {
     setRunModalTask(task);
     setRunMessage("");
     setRunResult(null);
+    try {
+      await loadRuntimeSnapshot();
+    } catch {
+      messageApi.warning("刷新运行时配置失败，将按后端实时配置执行");
+    }
   };
 
   const closeRunModal = () => {
@@ -264,7 +267,7 @@ export default () => {
               <div className="cw-dashboard-eyebrow">Agent Workflows</div>
               <h1>任务编排</h1>
               <p>
-                任务只保留名称与核心 System Prompt。运行时默认使用当前用户已启用的全部 Skills 和 MCP。
+                任务只保留名称与核心 System Prompt。运行时会实时读取当前全局启用配置。
               </p>
             </div>
           </section>
@@ -317,14 +320,6 @@ export default () => {
                         >
                           {row.system_prompt}
                         </Typography.Paragraph>
-                        <Space wrap>
-                          <Tag color="orange">
-                            {enabledSkills.length} 个已启用 Skill
-                          </Tag>
-                          <Tag color="cyan">
-                            {enabledMcpServers.length} 个已启用 MCP
-                          </Tag>
-                        </Space>
                       </Space>
                     ),
                   },
@@ -600,20 +595,17 @@ export default () => {
               >
                 <Space direction="vertical" size={10} style={{ width: "100%" }}>
                   <Typography.Text strong>运行上下文</Typography.Text>
-                  <Space wrap>
-                    <Tag color="orange">
-                      {enabledSkills.length} 个已启用 Skill
-                    </Tag>
-                    <Tag color="cyan">
-                      {enabledMcpServers.length} 个已启用 MCP
-                    </Tag>
-                  </Space>
                   <Typography.Paragraph
                     type="secondary"
                     style={{ marginBottom: 0 }}
                   >
-                    本任务不会单独指定模型、Skills 或工具，默认直接继承当前用户的全局启用配置。
+                    本任务不会单独指定模型、Skills 或工具，后端会在启动时实时读取当前全局启用配置。
                   </Typography.Paragraph>
+                  {runtimeSnapshot && (
+                    <Typography.Text type="secondary">
+                      最近检测：{runtimeSnapshot.enabledSkills} 个 Skill，{runtimeSnapshot.enabledMcpServers} 个 MCP（{new Date(runtimeSnapshot.checkedAt).toLocaleTimeString()}）
+                    </Typography.Text>
+                  )}
                 </Space>
               </Card>
 

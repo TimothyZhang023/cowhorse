@@ -11,8 +11,12 @@ import {
   updateSkill,
 } from "@/services/api";
 import {
+  DeleteOutlined,
+  EditOutlined,
   InboxOutlined,
   LinkOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
@@ -33,8 +37,8 @@ import {
   Popconfirm,
   Popover,
   Space,
-  Switch,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   message,
@@ -473,9 +477,9 @@ export default () => {
                         />
                         <b>{text}</b>
                         {Number(row.is_enabled) === 1 ? (
-                          <Tag color="success">已启用</Tag>
+                          <Tag className="cw-status-pill enabled">已启用</Tag>
                         ) : (
-                          <Tag>已禁用</Tag>
+                          <Tag className="cw-status-pill disabled">已禁用</Tag>
                         )}
                         {row.source_type ? (
                           <Tag
@@ -513,30 +517,47 @@ export default () => {
                     ),
                   },
                   actions: {
-                    render: (_, row) => [
-                      <a key="edit" onClick={() => setEditingSkill(row)}>
-                        编辑
-                      </a>,
-                      <Switch
-                        key="toggle"
-                        size="small"
-                        checked={Number(row.is_enabled) === 1}
-                        checkedChildren="启用"
-                        unCheckedChildren="禁用"
-                        onChange={(checked) => handleToggleSkill(row, checked)}
-                      />,
-                      <a
-                        key="delete"
-                        style={{ color: "red" }}
-                        onClick={async () => {
-                          await deleteSkill(row.id);
-                          messageApi.success("已删除");
-                          loadData();
-                        }}
-                      >
-                        删除
-                      </a>,
-                    ],
+                    render: (_, row) => (
+                      <div className="cw-row-icon-actions">
+                        <Tooltip title="编辑">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => setEditingSkill(row)}
+                          />
+                        </Tooltip>
+                        <Tooltip title={Number(row.is_enabled) === 1 ? "禁用" : "启用"}>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={
+                              Number(row.is_enabled) === 1 ? (
+                                <PauseCircleOutlined />
+                              ) : (
+                                <PlayCircleOutlined />
+                              )
+                            }
+                            onClick={() =>
+                              handleToggleSkill(row, Number(row.is_enabled) !== 1)
+                            }
+                          />
+                        </Tooltip>
+                        <Tooltip title="删除">
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={async () => {
+                              await deleteSkill(row.id);
+                              messageApi.success("已删除");
+                              loadData();
+                            }}
+                          />
+                        </Tooltip>
+                      </div>
+                    ),
                   },
                 }}
               />

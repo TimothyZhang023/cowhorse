@@ -7,13 +7,15 @@
   overflow: hidden;
 }
 .cw-dashboard-layout.dark {
-  background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
-  color: #e5e7eb;
+  background: radial-gradient(circle at 50% 0%, #1e293b 0%, #0f172a 100%);
+  color: #f1f5f9;
 }
 .cw-dashboard-sider {
   border-right: 1px solid rgba(148, 163, 184, 0.2);
-  padding: 12px 10px;
-  transition: width 0.2s ease;
+  padding: 16px 12px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -21,43 +23,50 @@
   height: 100vh;
   flex-shrink: 0;
 }
+.cw-dashboard-layout.dark .cw-dashboard-sider {
+  border-right-color: rgba(30, 41, 59, 1);
+  background: rgba(15, 23, 42, 0.6);
+}
 .cw-dashboard-sider.expanded {
-  width: 220px;
+  width: 240px;
 }
 .cw-dashboard-sider.collapsed {
-  width: 80px;
+  width: 88px;
 }
 .cw-sider-top {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 .cw-sider-bottom {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 .cw-sider-brand-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 0 4px;
 }
 .cw-sider-badge {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #4f46e5, #2563eb);
+  border-radius: 14px;
+  background: linear-gradient(135deg, #6366f1, #3b82f6);
   color: #fff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
+  font-weight: 800;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 .cw-sider-brand-text {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   flex: 1;
+  letter-spacing: -0.01em;
 }
 .cw-sider-toggle {
   color: #94a3b8 !important;
@@ -67,36 +76,51 @@
 }
 .cw-sider-btn {
   width: 100% !important;
-  height: 44px !important;
+  height: 48px !important;
   border-radius: 12px !important;
   justify-content: flex-start !important;
+  border: none !important;
+  font-weight: 500 !important;
+  transition: all 0.2s ease !important;
 }
 .cw-dashboard-sider.collapsed .cw-sider-btn {
-  width: 44px !important;
+  width: 48px !important;
+  height: 48px !important;
   justify-content: center !important;
+  padding: 0 !important;
 }
 .cw-sider-btn-active {
-  background: #dbeafe !important;
+  background: #eff6ff !important;
   color: #2563eb !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
 }
 .cw-sider-btn-danger:hover {
+  background: #fef2f2 !important;
   color: #ef4444 !important;
 }
 .cw-dashboard-layout.dark .cw-sider-btn-active {
-  background: #1e3a8a !important;
-  color: #bfdbfe !important;
+  background: rgba(37, 99, 235, 0.15) !important;
+  color: #60a5fa !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+}
+.cw-dashboard-layout.dark .cw-sider-btn:not(.cw-sider-btn-active) {
+  color: #94a3b8 !important;
+}
+.cw-dashboard-layout.dark .cw-sider-btn:not(.cw-sider-btn-active):hover {
+  background: rgba(255, 255, 255, 0.03) !important;
+  color: #f1f5f9 !important;
 }
 .cw-sider-divider-text {
   font-size: 11px;
-  color: #94a3b8;
+  color: #64748b;
   font-weight: 600;
-  padding: 16px 12px 4px;
+  padding: 20px 14px 4px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  opacity: 0.8;
+  letter-spacing: 0.1em;
+  opacity: 0.6;
 }
 .cw-dashboard-layout.dark .cw-sider-divider-text {
-  color: #64748b;
+  color: #475569;
 }
 
 @media (max-width: 768px) {

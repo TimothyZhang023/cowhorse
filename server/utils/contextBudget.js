@@ -152,16 +152,19 @@ export function buildStaticContextBudget({
       key: "global_prompt",
       label: "全局规则",
       tokens: estimateTokenCount(globalPrompt),
+      content: globalPrompt,
     },
     {
       key: "skills",
       label: "Skills",
       tokens: estimateTokenCount(skillsPrompt),
+      content: skillsPrompt,
     },
     {
       key: "mcp_tools",
       label: "MCP Tools",
       tokens: estimateTokenCount(toolsSchema),
+      content: JSON.stringify(toolsSchema, null, 2),
     },
   ].map((item) => ({
     ...item,

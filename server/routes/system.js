@@ -13,6 +13,7 @@ import {
   setAppSetting,
 } from "../models/database.js";
 import { getAllAvailableTools } from "../models/mcpManager.js";
+import { getShellEnv } from "../utils/shellEnv.js";
 import { buildStaticContextBudget } from "../utils/contextBudget.js";
 import { getPreferredEnabledModel } from "../utils/modelSelection.js";
 
@@ -43,6 +44,7 @@ async function withTimeout(promise, ms, fallbackValue) {
 async function inspectCommand(binary, args = ["--version"]) {
   try {
     const { stdout, stderr } = await execFileAsync(binary, args, {
+      env: getShellEnv(),
       timeout: 5000,
       maxBuffer: 1024 * 128,
     });
@@ -62,6 +64,22 @@ async function inspectCommand(binary, args = ["--version"]) {
   }
 }
 
+async function inspectPython() {
+  const p3 = await inspectCommand("python3");
+  if (p3.installed) {
+    return { ...p3, name: "Python" };
+  }
+  const p = await inspectCommand("python");
+  if (p.installed && p.version.startsWith("Python 3")) {
+    return { ...p, name: "Python" };
+  }
+  return {
+    name: "Python",
+    installed: false,
+    version: "",
+    error: p3.installed ? "" : p3.error,
+  };
+}
 async function inspectNetworkTarget(url) {
   try {
     const response = await fetch(url, {
@@ -132,8 +150,7 @@ router.get("/overview", async (req, res) => {
           inspectCommand("node"),
           inspectCommand("npm"),
           inspectCommand("brew"),
-          inspectCommand("python3"),
-          inspectCommand("python"),
+          inspectPython(),
         ]),
         Promise.all(NETWORK_TARGETS.map((url) => inspectNetworkTarget(url))),
       ]);

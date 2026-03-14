@@ -1,6 +1,6 @@
 # 🎯 Web Agent Assistant (Workhorse) 测试规范 (Test Spec)
 
-这份文档用于指引在使用 Workhorse (CW) 网页端 AI 助手时，如何完整进行各项核心功能的前后端端到端测试。
+这份文档用于指引在使用 Workhorse 网页端 AI 助手时，如何完整进行各项核心功能的前后端端到端测试。
 
 ## 1. 基础配置测试 (Base Configuration)
 

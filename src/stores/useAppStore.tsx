@@ -14,10 +14,10 @@ interface AppState {
 }
 
 const defaultState: AppState = {
-  currentUser: { username: "local", role: "admin", uid: "local" },
+  currentUser: { username: "牛马", role: "admin", uid: "local" },
   isLoggedIn: true,
-  login: async () => {},
-  logout: async () => {},
+  login: async () => { },
+  logout: async () => { },
 };
 
 const AppStoreContext = createContext<AppState>(defaultState);

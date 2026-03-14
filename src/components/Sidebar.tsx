@@ -85,26 +85,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
     themeMode === "system"
       ? "跟随系统"
       : resolvedTheme === "dark"
-      ? "深色模式"
-      : "浅色模式";
+        ? "深色模式"
+        : "浅色模式";
   const themeIcon =
     themeMode === "system" ? (
       <DesktopOutlined />
     ) : resolvedTheme === "dark" ? (
-      <SunOutlined />
-    ) : (
       <MoonOutlined />
+    ) : (
+      <SunOutlined />
     );
 
   return (
     <aside
-      className={`cw-dashboard-sider ${
-        moduleExpanded ? "expanded" : "collapsed"
-      }`}
+      className={`cw-dashboard-sider ${moduleExpanded ? "expanded" : "collapsed"
+        }`}
     >
       <div className="cw-sider-top">
         <div className="cw-sider-brand-row">
-          <div className="cw-sider-badge">CW</div>
+          <div className="cw-sider-badge">WH</div>
           {moduleExpanded && (
             <span className="cw-sider-brand-text">workhorse</span>
           )}
@@ -142,9 +141,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               key={item.key}
               type="text"
               icon={item.icon}
-              className={`cw-sider-btn ${
-                isActive ? "cw-sider-btn-active" : ""
-              }`}
+              className={`cw-sider-btn ${isActive ? "cw-sider-btn-active" : ""
+                }`}
               onClick={() => navigate(item.path!)}
             >
               {moduleExpanded && <span>{item.label}</span>}
@@ -161,8 +159,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             selectedKeys: [themeMode],
             items: [
               { key: "system", icon: <DesktopOutlined />, label: "跟随系统" },
-              { key: "light", icon: <MoonOutlined />, label: "浅色模式" },
-              { key: "dark", icon: <SunOutlined />, label: "深色模式" },
+              { key: "light", icon: <SunOutlined />, label: "浅色模式" },
+              { key: "dark", icon: <MoonOutlined />, label: "深色模式" },
             ],
             onClick: ({ key }) => setThemeMode(key as ThemeMode),
           }}

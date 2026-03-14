@@ -8,9 +8,11 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+const WORKHORSE_DATA_DIR =
+  process.env.WORKHORSE_DATA_DIR || join(os.homedir(), ".workhorse");
+const WORKHORSE_TMP_DIR = join(WORKHORSE_DATA_DIR, "tmp");
 const SKILL_SOURCE_ROOT = join(
-  process.env.WORKHORSE_APP_DATA_DIR || process.cwd(),
-  "data",
+  WORKHORSE_DATA_DIR,
   "skill-sources"
 );
 const IGNORED_DIRECTORIES = new Set([
@@ -274,7 +276,8 @@ async function extractZipArchive(filename, zipBase64) {
     throw new Error("仅支持安装 .zip 格式的 Skill 包");
   }
 
-  const tempRoot = await fsp.mkdtemp(join(os.tmpdir(), "cw-skill-zip-"));
+  await ensureDirectory(WORKHORSE_TMP_DIR);
+  const tempRoot = await fsp.mkdtemp(join(WORKHORSE_TMP_DIR, "cw-skill-zip-"));
   const archivePath = join(tempRoot, filename || "skills.zip");
   const extractDir = join(tempRoot, "extracted");
 

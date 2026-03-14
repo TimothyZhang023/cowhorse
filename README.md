@@ -1,4 +1,4 @@
-# workhorse (CW)
+# workhorse
 
 一个本地优先的个人 AI Assistant 工作台。当前主形态已经从传统 Web 项目切到 `Vite + React + Tauri + Node sidecar`，默认面向单机桌面场景：前端是桌面壳，后端是本地 Node 服务，数据默认落在 SQLite。
 
@@ -17,7 +17,7 @@
 - 数据库：SQLite（默认）/ MySQL（可选）
 - 模型接入：OpenAI Compatible / OpenAI / Gemini / OpenRouter
 - 工具能力：MCP、Skills、Agent Tasks、Cron Jobs、Channel 扩展
-- 对外接口：`/v1/*` OpenAI 兼容代理
+- 对外接口：`/v1/*` OpenAI 兼容代理 (由 gateway 代理)
 
 ## 主要能力
 
@@ -64,13 +64,17 @@ npm run dev
 
 默认会同时启动：
 
-- 前端开发服务：`http://localhost:5173`
-- 本地 API 服务：`http://127.0.0.1:8080`
-
-启动桌面开发模式：
+- 前端开发服务 (facade)：`http://127.0.0.1:12620`
+- API 代理服务 (gateway)：`http://127.0.0.1:12621`
 
 ```bash
 npm run dev:tauri
+```
+
+或者使用重新启动脚本（清理端口并启动）：
+
+```bash
+npm run restart
 ```
 
 ## 构建
@@ -84,6 +88,7 @@ npm run build:frontend
 构建桌面版：
 
 ```bash
+# 构建 sidecar 并打包 tauri app
 npm run build:tauri
 ```
 
@@ -91,10 +96,10 @@ macOS 下默认产物位置：
 
 - `src-tauri/target/release/bundle/macos/workhorse.app`
 
-如果只想单独启动后端 sidecar：
+如果你想单独启动后端 sidecar：
 
 ```bash
-npm start
+npm run start
 ```
 
 ## 测试与校验
@@ -133,7 +138,7 @@ npm run build:frontend
 
 | 变量                      | 默认值 | 说明                  |
 | ------------------------- | ------ | --------------------- |
-| `PORT`                    | `8080` | Node sidecar 监听端口 |
+| `PORT`                    | `12621` | Node sidecar 监听端口 |
 | `LOG_LEVEL`               | `info` | Pino 日志级别         |
 | `GLOBAL_SYSTEM_PROMPT_MD` | 空     | 全局系统提示词默认值  |
 
@@ -159,4 +164,4 @@ npm run build:frontend
 
 - 当前实现默认是单机桌面模式，鉴权上下文会注入本地用户 `local`
 - `src-tauri/sidecar/` 需要存在可执行 sidecar，Tauri 打包时会一并带入
-- 生产桌面版前端请求默认走 `http://127.0.0.1:8080`
+- 生产桌面版前端请求默认走 `http://127.0.0.1:12621`

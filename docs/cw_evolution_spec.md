@@ -1,4 +1,4 @@
-# workhorse (CW) — 产品演进 Spec
+# workhorse — 产品演进 Spec
 
 > 最后更新：2026-03-03 ｜ 基于对项目全部源码的逐行审读
 

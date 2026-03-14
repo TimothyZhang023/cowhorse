@@ -559,7 +559,7 @@
   border: 1px solid rgba(20, 184, 166, 0.22);
   background: linear-gradient(180deg, rgba(240, 253, 250, 0.92), #ffffff);
   border-radius: 16px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   box-shadow: 0 12px 32px -24px rgba(13, 148, 136, 0.45);
 }
 
@@ -586,14 +586,17 @@
 }
 
 .tool-message-controls {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 6px;
+  display: inline-flex;
+  margin-bottom: 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
 }
 
 .tool-message-controls .ant-btn {
-  padding-inline: 0;
+  padding-inline: 10px;
   font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .tool-message-name {
@@ -627,6 +630,26 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 8px 12px;
+}
+
+.tool-message-body.collapsed {
+  max-height: 74px;
+  overflow: hidden;
+  position: relative;
+}
+
+.tool-message-body.collapsed::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 26px;
+  background: linear-gradient(180deg, transparent, var(--bg-secondary));
 }
 
 .image-preview-row {

@@ -83,18 +83,26 @@ pub fn run() {
       }
 
       app.handle().plugin(tauri_plugin_shell::init())?;
+      let workhorse_data_dir = app.path().home_dir().map(|home| home.join(".workhorse"));
+      if let Ok(dir) = &workhorse_data_dir {
+        fs::create_dir_all(dir)?;
+        fs::create_dir_all(dir.join("tmp"))?;
+      }
 
       let sidecar = if cfg!(debug_assertions) {
         let repo_root = project_root();
         let server_entry = repo_root.join("server.js");
         let node_binary = std::env::var("WORKHORSE_NODE_BIN").unwrap_or_else(|_| "node".into());
-
-        app
+        let mut command = app
           .shell()
           .command(node_binary)
           .args([server_entry.to_string_lossy().into_owned()])
           .current_dir(repo_root)
-          .env("PORT", "12621")
+          .env("PORT", "12621");
+        if let Ok(dir) = &workhorse_data_dir {
+          command = command.env("WORKHORSE_DATA_DIR", dir.to_string_lossy().to_string());
+        }
+        command
       } else {
         let resource_dir = app.path().resource_dir()?;
         let runtime_dir = resource_dir.join("sidecar-runtime");
@@ -111,8 +119,14 @@ pub fn run() {
           .shell()
           .command(launcher_path.to_string_lossy().into_owned())
           .current_dir(&app_data_dir)
-          .env("PORT", "12621")
-          .env("WORKHORSE_APP_DATA_DIR", app_data_dir.to_string_lossy().to_string());
+          .env("PORT", "12621");
+
+        if let Ok(dir) = &workhorse_data_dir {
+          command = command.env("WORKHORSE_DATA_DIR", dir.to_string_lossy().to_string());
+        } else {
+          command =
+            command.env("WORKHORSE_APP_DATA_DIR", app_data_dir.to_string_lossy().to_string());
+        }
 
         if let Ok(home_dir) = app.path().home_dir() {
           command = command.env(

@@ -5,15 +5,23 @@ import {
   batchUpdateMcpServers,
   createMcpServer,
   deleteMcpServer,
+  generateDraftFromMarketMcp,
   getDefaultMcpTemplates,
   getMcpServers,
-  generateDraftFromMarketMcp,
   importDefaultMcpTemplate,
   searchMarketMcp,
   testMcpServerConnection,
   updateMcpServer,
 } from "@/services/api";
-import { PlusOutlined, ApiOutlined } from "@ant-design/icons";
+import {
+  ApiOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  LinkOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import {
   ModalForm,
   ProFormRadio,
@@ -32,10 +40,11 @@ import {
   message,
   Popconfirm,
   Space,
-  Switch,
   Tag,
   Form,
+  Tooltip,
   Typography,
+  Tabs,
 } from "antd";
 import { useEffect, useState } from "react";
 import "../Dashboard/index.css";
@@ -463,9 +472,9 @@ export default () => {
                           {row.type}
                         </Tag>
                         {row.is_enabled === 1 ? (
-                          <Tag color="success">已启用</Tag>
+                          <Tag className="cw-status-pill enabled">已启用</Tag>
                         ) : (
-                          <Tag color="default">已禁用</Tag>
+                          <Tag className="cw-status-pill disabled">已禁用</Tag>
                         )}
                       </Space>
                     ),
@@ -483,32 +492,52 @@ export default () => {
                     },
                   },
                   actions: {
-                    render: (_, row) => [
-                      <a
-                        key="test"
-                        onClick={() => handleTestConnection(row.id)}
-                      >
-                        {testingServerId === row.id ? "测试中..." : "测试连接"}
-                      </a>,
-                      <Switch
-                        key="toggle"
-                        size="small"
-                        checked={row.is_enabled === 1}
-                        checkedChildren="启用"
-                        unCheckedChildren="禁用"
-                        onChange={(checked) => handleToggleEnable(row, checked)}
-                      />,
-                      <a key="edit" onClick={() => setEditingServer(row)}>
-                        编辑
-                      </a>,
-                      <a
-                        key="delete"
-                        onClick={() => handleDelete(row.id)}
-                        style={{ color: "red" }}
-                      >
-                        删除
-                      </a>,
-                    ],
+                    render: (_, row) => (
+                      <div className="cw-row-icon-actions">
+                        <Tooltip title="测试连接">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<LinkOutlined />}
+                            loading={testingServerId === row.id}
+                            onClick={() => handleTestConnection(row.id)}
+                          />
+                        </Tooltip>
+                        <Tooltip title={row.is_enabled === 1 ? "禁用" : "启用"}>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={
+                              row.is_enabled === 1 ? (
+                                <PauseCircleOutlined />
+                              ) : (
+                                <PlayCircleOutlined />
+                              )
+                            }
+                            onClick={() =>
+                              handleToggleEnable(row, row.is_enabled !== 1)
+                            }
+                          />
+                        </Tooltip>
+                        <Tooltip title="编辑">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => setEditingServer(row)}
+                          />
+                        </Tooltip>
+                        <Tooltip title="删除">
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => handleDelete(row.id)}
+                          />
+                        </Tooltip>
+                      </div>
+                    ),
                   },
                 }}
               />
@@ -778,94 +807,101 @@ export default () => {
             placeholder="如：Postgres Database"
             rules={[{ required: true }]}
           />
-          <ProFormTextArea
-            name="raw_json"
-            label="JSON 直填配置"
-            placeholder='{"name":"GitHub","type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_TOKEN":"YOUR_TOKEN"},"is_enabled":1}'
-            fieldProps={{
-              rows: 6,
-            }}
-            extra="支持直接粘贴完整 MCP JSON。若与下面 GUI 字段重复，JSON 同名字段优先生效。"
-          />
-          <ProFormRadio.Group
-            name="type"
-            label="连接类型"
-            options={[
-              { label: "本地命令 (stdio)", value: "stdio" },
-              { label: "远程服务 (sse)", value: "sse" },
-            ]}
-            rules={[{ required: true }]}
-          />
 
-          <Form.Item
-            noStyle
-            shouldUpdate={(prevValues, currentValues) =>
-              prevValues.type !== currentValues.type
-            }
-          >
-            {({ getFieldValue }) => {
-              const type = getFieldValue("type");
-              if (type === "stdio") {
-                return (
-                  <>
-                    <ProFormText
-                      name="command"
-                      label="可执行命令"
-                      placeholder="如：npx, python, docker"
+          <Tabs
+            defaultActiveKey="wizard"
+            items={[
+              {
+                key: "wizard",
+                label: "配置向导",
+                children: (
+                  <div style={{ marginTop: 16 }}>
+                    <ProFormRadio.Group
+                      name="type"
+                      label="连接类型"
+                      options={[
+                        { label: "本地命令 (stdio)", value: "stdio" },
+                        { label: "远程服务 (sse)", value: "sse" },
+                      ]}
                       rules={[{ required: true }]}
                     />
-                    <ProFormText
-                      name="args"
-                      label="运行参数"
-                      placeholder="如：-y @modelcontextprotocol/server-postgres postgres://... (用空格分隔)"
+
+                    <Form.Item noStyle shouldUpdate={(prev, curr) => prev.type !== curr.type}>
+                      {({ getFieldValue }) => {
+                        const type = getFieldValue("type");
+                        if (type === "stdio") {
+                          return (
+                            <>
+                              <ProFormText
+                                name="command"
+                                label="可执行命令"
+                                placeholder="如：npx, python, docker"
+                                rules={[{ required: true }]}
+                              />
+                              <ProFormText
+                                name="args"
+                                label="运行参数"
+                                placeholder="如：-y @modelcontextprotocol/server-postgres postgres://... (用空格分隔)"
+                              />
+                              <ProFormTextArea
+                                name="env"
+                                label="环境变量 (JSON)"
+                                placeholder='{"GITHUB_TOKEN": "YOUR_GITHUB_TOKEN"}'
+                                fieldProps={{ rows: 3 }}
+                              />
+                            </>
+                          );
+                        }
+                        return (
+                          <>
+                            <ProFormText
+                              name="url"
+                              label="服务 URL"
+                              placeholder="如：http://localhost:3001/sse"
+                              rules={[{ required: true }]}
+                            />
+                            <ProFormTextArea
+                              name="headers"
+                              label="自定义 Headers (JSON)"
+                              placeholder='{"Authorization": "Bearer ...", "X-Custom": "Value"}'
+                              fieldProps={{ rows: 3 }}
+                            />
+                          </>
+                        );
+                      }}
+                    </Form.Item>
+
+                    <ProFormTextArea
+                      name="auth"
+                      label="认证配置 (JSON)"
+                      placeholder='{"type": "bearer", "token": "..."}'
+                      fieldProps={{ rows: 2 }}
+                      extra="可选：用于 Stdio 或 SSE 的认证扩展配置"
                     />
-                  </>
-                );
-              } else if (type === "sse") {
-                return (
-                  <ProFormText
-                    name="url"
-                    label="SSE URL"
-                    placeholder="如：http://localhost:3001/sse"
-                    rules={[{ required: true }]}
-                  />
-                );
-              }
-              return null;
-            }}
-          </Form.Item>
 
-          <ProFormTextArea
-            name="env"
-            label="环境变量 (JSON)"
-            placeholder='{"GITHUB_TOKEN": "YOUR_GITHUB_TOKEN"}'
-            fieldProps={{
-              rows: 4,
-            }}
-          />
-
-          <ProFormTextArea
-            name="headers"
-            label="自定义 Headers (JSON)"
-            placeholder='{"Authorization": "Bearer ...", "X-Custom": "Value"}'
-            fieldProps={{
-              rows: 4,
-            }}
-          />
-
-          <ProFormTextArea
-            name="auth"
-            label="认证信息 (JSON)"
-            placeholder='{"type": "bearer", "token": "..."} 或 {"type": "basic", "username": "...", "password": "..."}'
-            fieldProps={{
-              rows: 3,
-            }}
-          />
-
-          <ProFormSwitch
-            name="is_enabled"
-            label="启用此服务"
-            initialValue={true}
+                    <ProFormSwitch name="is_enabled" label="立即启用" />
+                  </div>
+                ),
+              },
+              {
+                key: "code",
+                label: "代码模式",
+                children: (
+                  <div style={{ marginTop: 16 }}>
+                    <ProFormTextArea
+                      name="raw_json"
+                      label="JSON 配置内容"
+                      placeholder='{"name":"GitHub","type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_TOKEN":"YOUR_TOKEN"},"is_enabled":1}'
+                      fieldProps={{
+                        rows: 12,
+                        style: { fontFamily: "monospace" },
+                      }}
+                      extra="直接粘贴完整 MCP JSON 配置。代码模式下的配置会覆盖向导模式下的同名参数。"
+                    />
+                  </div>
+                ),
+              },
+            ]}
           />
         </ModalForm>
 
