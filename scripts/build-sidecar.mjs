@@ -25,6 +25,14 @@ async function build() {
     // Move the bundled file to a predictable name
     copyFileSync(join(rootDir, 'dist-server', 'index.js'), join(rootDir, 'dist-server.cjs'));
 
+    // 2.5 Generate sea-config.json dynamically
+    const seaConfig = {
+        main: "dist-server.cjs",
+        output: "sea-prep.blob",
+        disableExperimentalSEAWarning: true
+    };
+    writeFileSync(join(rootDir, 'sea-config.json'), JSON.stringify(seaConfig, null, 2));
+
     // 3. Generate SEA blob
     console.log('Generating SEA blob...');
     run('node --experimental-sea-config sea-config.json');
