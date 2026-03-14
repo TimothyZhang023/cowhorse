@@ -1,17 +1,12 @@
 import { Sidebar } from "@/components/Sidebar";
 import { useShellPreferences } from "@/hooks/useShellPreferences";
 import {
-  createSkill,
   createAgentTask,
   deleteAgentTask,
   generateAgentTask,
-  generateDraftFromMarketMcp,
   getAgentTasks,
-  getAvailableModels,
   getMcpServers,
-  getMcpTools,
   getSkills,
-  importDefaultMcpTemplate,
   getTaskRunEvents,
   getTaskRuns,
   runAgentTask,
@@ -19,25 +14,22 @@ import {
 } from "@/services/api";
 import {
   ClockCircleOutlined,
+  ExperimentOutlined,
   HistoryOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RobotOutlined,
-  ExperimentOutlined,
 } from "@ant-design/icons";
 import {
   ModalForm,
-  ProFormSelect,
   ProFormSwitch,
   ProFormText,
   ProFormTextArea,
   ProList,
 } from "@ant-design/pro-components";
 import { useNavigate } from "react-router-dom";
-import { useAppStore } from "@/stores/useAppStore";
 import {
   Alert,
-  theme as antdTheme,
   Button,
   Card,
   ConfigProvider,
@@ -45,20 +37,21 @@ import {
   Empty,
   Input,
   Modal,
-  message,
-  Spin,
   Space,
+  Spin,
   Tag,
   Timeline,
   Typography,
+  message,
+  theme as antdTheme,
 } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "../Dashboard/index.css";
 
 type TaskRunState = {
   runId: number;
   conversationId: string;
-  finalResponse: string;
+  status: "running";
 };
 
 const formatRunStatus = (status?: string) => {
@@ -106,7 +99,6 @@ const formatDuration = (startedAt?: string, finishedAt?: string) => {
 };
 
 export default () => {
-  const { currentUser, isLoggedIn } = useAppStore();
   const navigate = useNavigate();
   const [messageApi, messageContextHolder] = message.useMessage();
   const {
@@ -119,17 +111,14 @@ export default () => {
   } = useShellPreferences();
   const [loading, setLoading] = useState(false);
   const [tasks, setTasks] = useState<API.AgentTask[]>([]);
+  const [skills, setSkills] = useState<API.Skill[]>([]);
+  const [mcpServers, setMcpServers] = useState<API.McpServer[]>([]);
   const [editingTask, setEditingTask] = useState<Partial<API.AgentTask> | null>(
     null
   );
   const [generatorOpen, setGeneratorOpen] = useState(false);
   const [generationResult, setGenerationResult] =
     useState<API.AgentTaskGenerationResult | null>(null);
-
-  const [skills, setSkills] = useState<API.Skill[]>([]);
-  const [mcpServers, setMcpServers] = useState<API.McpServer[]>([]);
-  const [availableModels, setAvailableModels] = useState<API.Model[]>([]);
-  const [availableTools, setAvailableTools] = useState<any[]>([]);
   const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
   const [runModalTask, setRunModalTask] = useState<API.AgentTask | null>(null);
   const [runMessage, setRunMessage] = useState("");
@@ -141,32 +130,40 @@ export default () => {
     API.TaskRunEvent[]
   >([]);
   const [runEventsLoading, setRunEventsLoading] = useState(false);
-  const [importingTemplateId, setImportingTemplateId] = useState<string | null>(
-    null
+
+  const enabledSkills = useMemo(
+    () => skills.filter((skill) => Number(skill.is_enabled) === 1),
+    [skills]
   );
-  const [creatingSkillName, setCreatingSkillName] = useState<string | null>(
-    null
+  const enabledMcpServers = useMemo(
+    () => mcpServers.filter((server) => Number(server.is_enabled) === 1),
+    [mcpServers]
   );
-  const [marketDraftingName, setMarketDraftingName] = useState<string | null>(
-    null
-  );
+
+  const loadRuns = async () => {
+    setRunsLoading(true);
+    try {
+      const runs = await getTaskRuns(undefined, 20);
+      setTaskRuns(runs);
+    } catch {
+      messageApi.error("加载任务运行记录失败");
+    } finally {
+      setRunsLoading(false);
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [t, s, m, models, tools] = await Promise.all([
+      const [taskData, skillData, serverData] = await Promise.all([
         getAgentTasks(),
         getSkills(),
         getMcpServers(),
-        getAvailableModels(),
-        getMcpTools(),
       ]);
-      setTasks(t);
-      setSkills(s);
-      setMcpServers(m);
-      setAvailableModels(models);
-      setAvailableTools(tools);
-    } catch (e) {
+      setTasks(taskData);
+      setSkills(skillData);
+      setMcpServers(serverData);
+    } catch {
       messageApi.error("加载数据失败");
     } finally {
       setLoading(false);
@@ -177,94 +174,6 @@ export default () => {
     loadData();
     loadRuns();
   }, []);
-
-  const handleImportTemplateFromSuggestions = async (templateId: string) => {
-    try {
-      setImportingTemplateId(templateId);
-      const result = await importDefaultMcpTemplate(templateId);
-      messageApi.success(
-        result.template.needs_configuration
-          ? "默认 MCP 已导入，请补充配置后启用"
-          : "默认 MCP 已导入"
-      );
-      await loadData();
-    } catch (error: any) {
-      messageApi.error(
-        error?.response?.data?.error ||
-          error?.data?.error ||
-          error?.message ||
-          "导入默认 MCP 失败"
-      );
-    } finally {
-      setImportingTemplateId(null);
-    }
-  };
-
-  const handleCreateSuggestedSkill = async (skillDraft: Partial<API.Skill>) => {
-    try {
-      setCreatingSkillName(String(skillDraft.name || ""));
-      const created = await createSkill({
-        name: skillDraft.name,
-        description: skillDraft.description,
-        prompt: skillDraft.prompt,
-        tools: Array.isArray(skillDraft.tools) ? skillDraft.tools : [],
-      });
-      messageApi.success(`已创建技能 ${created.name}`);
-      await loadData();
-      setEditingTask((current) =>
-        current
-          ? {
-              ...current,
-              skill_ids: Array.from(
-                new Set([...(current.skill_ids || []), created.id])
-              ),
-            }
-          : current
-      );
-    } catch (error: any) {
-      messageApi.error(
-        error?.response?.data?.error ||
-          error?.data?.error ||
-          error?.message ||
-          "创建技能失败"
-      );
-    } finally {
-      setCreatingSkillName(null);
-    }
-  };
-
-  const handleImportMarketMcp = async (serverName: string) => {
-    try {
-      setMarketDraftingName(serverName);
-      await generateDraftFromMarketMcp({
-        server_name: serverName,
-        auto_create: true,
-      });
-      messageApi.success("市场 MCP 已导入");
-      await loadData();
-    } catch (error: any) {
-      messageApi.error(
-        error?.response?.data?.error ||
-          error?.data?.error ||
-          error?.message ||
-          "导入市场 MCP 失败"
-      );
-    } finally {
-      setMarketDraftingName(null);
-    }
-  };
-
-  const loadRuns = async () => {
-    setRunsLoading(true);
-    try {
-      const runs = await getTaskRuns(undefined, 20);
-      setTaskRuns(runs);
-    } catch (error) {
-      messageApi.error("加载任务运行记录失败");
-    } finally {
-      setRunsLoading(false);
-    }
-  };
 
   const openRunModal = (task: API.AgentTask) => {
     setRunModalTask(task);
@@ -289,17 +198,12 @@ export default () => {
     try {
       const events = await getTaskRunEvents(run.id);
       setSelectedRunEvents(events);
-    } catch (error) {
+    } catch {
       messageApi.error("加载运行时间线失败");
       setSelectedRunEvents([]);
     } finally {
       setRunEventsLoading(false);
     }
-  };
-
-  const closeRunTimeline = () => {
-    setSelectedRun(null);
-    setSelectedRunEvents([]);
   };
 
   const handleRunTask = async () => {
@@ -315,12 +219,12 @@ export default () => {
       const nextResult = {
         runId: Number(result.runId),
         conversationId: String(result.conversationId),
-        finalResponse: String(result.finalResponse || ""),
+        status: "running" as const,
       };
       setRunResult(nextResult);
-      messageApi.success(`任务已启动，会话 ID: ${nextResult.conversationId}`);
-      await loadData();
-      await loadRuns();
+      messageApi.success(`任务已进入后台运行，会话 ID: ${nextResult.conversationId}`);
+      void loadData();
+      void loadRuns();
     } catch (error: any) {
       messageApi.error(
         error?.response?.data?.error ||
@@ -360,7 +264,7 @@ export default () => {
               <div className="cw-dashboard-eyebrow">Agent Workflows</div>
               <h1>任务编排</h1>
               <p>
-                定义具有特定角色的子 Agent，组合技能和工具，构建自动化的业务流。
+                任务只保留名称与核心 System Prompt。运行时默认使用当前用户已启用的全部 Skills 和 MCP。
               </p>
             </div>
           </section>
@@ -388,9 +292,7 @@ export default () => {
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
-                    onClick={() =>
-                      setEditingTask({ skill_ids: [], tool_names: [] })
-                    }
+                    onClick={() => setEditingTask({})}
                   >
                     创建任务
                   </Button>
@@ -409,23 +311,19 @@ export default () => {
                   description: {
                     render: (_, row) => (
                       <Space direction="vertical" style={{ width: "100%" }}>
-                        <div>{row.description}</div>
-                        <Space>
-                          {row.skill_ids?.map((sid) => {
-                            const s = (
-                              Array.isArray(skills) ? skills : []
-                            ).find((sk) => sk.id === sid);
-                            return (
-                              <Tag key={sid} color="orange">
-                                {s?.name || `Skill ${sid}`}
-                              </Tag>
-                            );
-                          })}
-                          {row.tool_names?.map((tn) => (
-                            <Tag key={tn} color="cyan">
-                              {tn}
-                            </Tag>
-                          ))}
+                        <Typography.Paragraph
+                          ellipsis={{ rows: 2, expandable: false }}
+                          style={{ marginBottom: 0 }}
+                        >
+                          {row.system_prompt}
+                        </Typography.Paragraph>
+                        <Space wrap>
+                          <Tag color="orange">
+                            {enabledSkills.length} 个已启用 Skill
+                          </Tag>
+                          <Tag color="cyan">
+                            {enabledMcpServers.length} 个已启用 MCP
+                          </Tag>
                         </Space>
                       </Space>
                     ),
@@ -463,26 +361,6 @@ export default () => {
 
             {generationResult && (
               <Card className="cw-module-card" style={{ marginTop: 16 }}>
-                <div
-                  style={{
-                    marginBottom: 16,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <Space>
-                    <ExperimentOutlined
-                      style={{ fontSize: 18, color: "#8b5cf6" }}
-                    />
-                    <h3 style={{ margin: 0 }}>需求分析与建议</h3>
-                  </Space>
-                  <Typography.Text type="secondary">
-                    {generationResult.endpoint || "默认 Endpoint"} ·{" "}
-                    {generationResult.model || "默认模型"}
-                  </Typography.Text>
-                </div>
-
                 <Space direction="vertical" size={16} style={{ width: "100%" }}>
                   <Alert
                     showIcon
@@ -496,203 +374,14 @@ export default () => {
                         : "已生成任务草稿，可继续调整后保存。"
                     }
                   />
-
                   {generationResult.analysis.workflow_steps?.length ? (
                     <div>
                       <Typography.Text strong>工作流拆解</Typography.Text>
                       <Timeline
                         style={{ marginTop: 12 }}
                         items={generationResult.analysis.workflow_steps.map(
-                          (step) => ({
-                            children: step,
-                          })
+                          (step) => ({ children: step })
                         )}
-                      />
-                    </div>
-                  ) : null}
-
-                  {generationResult.analysis.capability_breakdown?.length ? (
-                    <div>
-                      <Typography.Text strong>能力拆解</Typography.Text>
-                      <div style={{ marginTop: 8 }}>
-                        <Space wrap>
-                          {generationResult.analysis.capability_breakdown.map(
-                            (item) => (
-                              <Tag key={item} color="purple">
-                                {item}
-                              </Tag>
-                            )
-                          )}
-                        </Space>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {generationResult.suggested_skills?.length ? (
-                    <div>
-                      <Typography.Text strong>建议新增技能</Typography.Text>
-                      <ProList<Partial<API.Skill>>
-                        rowKey={(row) => String(row.name)}
-                        style={{ marginTop: 12 }}
-                        dataSource={generationResult.suggested_skills}
-                        metas={{
-                          title: {
-                            render: (_, row) => <b>{row.name}</b>,
-                          },
-                          description: {
-                            render: (_, row) => (
-                              <Space
-                                direction="vertical"
-                                style={{ width: "100%" }}
-                              >
-                                <Typography.Text>
-                                  {row.description || "-"}
-                                </Typography.Text>
-                                {row.tools?.length ? (
-                                  <Space wrap>
-                                    {row.tools.map((tool) => (
-                                      <Tag key={tool} color="orange">
-                                        {tool}
-                                      </Tag>
-                                    ))}
-                                  </Space>
-                                ) : null}
-                              </Space>
-                            ),
-                          },
-                          actions: {
-                            render: (_, row) => [
-                              <Button
-                                key="create"
-                                type="link"
-                                loading={creatingSkillName === row.name}
-                                onClick={() => handleCreateSuggestedSkill(row)}
-                              >
-                                导入为技能
-                              </Button>,
-                            ],
-                          },
-                        }}
-                      />
-                    </div>
-                  ) : null}
-
-                  {generationResult.recommended_mcp_templates?.length ? (
-                    <div>
-                      <Typography.Text strong>
-                        推荐导入的默认 MCP
-                      </Typography.Text>
-                      <ProList<API.DefaultMcpTemplate>
-                        rowKey="id"
-                        style={{ marginTop: 12 }}
-                        dataSource={generationResult.recommended_mcp_templates}
-                        metas={{
-                          title: {
-                            render: (_, row) => (
-                              <Space wrap>
-                                <b>{row.name}</b>
-                                <Tag color="blue">{row.category}</Tag>
-                                {row.needs_configuration ? (
-                                  <Tag color="orange">需配置</Tag>
-                                ) : (
-                                  <Tag color="success">可直接导入</Tag>
-                                )}
-                              </Space>
-                            ),
-                          },
-                          description: {
-                            dataIndex: "description",
-                          },
-                          actions: {
-                            render: (_, row) => [
-                              <Button
-                                key="import"
-                                type="link"
-                                loading={importingTemplateId === row.id}
-                                onClick={() =>
-                                  handleImportTemplateFromSuggestions(row.id)
-                                }
-                              >
-                                导入默认 MCP
-                              </Button>,
-                            ],
-                          },
-                        }}
-                      />
-                    </div>
-                  ) : null}
-
-                  {generationResult.market_mcp_recommendations?.length ? (
-                    <div>
-                      <Typography.Text strong>
-                        市场 MCP 检索结果
-                      </Typography.Text>
-                      <ProList<API.AgentTaskGenerationMarketMcp>
-                        rowKey={(row) => `${row.name}-${row.transport}`}
-                        style={{ marginTop: 12 }}
-                        dataSource={generationResult.market_mcp_recommendations}
-                        metas={{
-                          title: {
-                            render: (_, row) => (
-                              <Space wrap>
-                                <b>{row.title || row.name}</b>
-                                {row.transport ? (
-                                  <Tag color="geekblue">{row.transport}</Tag>
-                                ) : null}
-                                {row.template_id ? (
-                                  <Tag color="gold">有默认模板</Tag>
-                                ) : null}
-                              </Space>
-                            ),
-                          },
-                          description: {
-                            render: (_, row) => (
-                              <Space direction="vertical">
-                                <Typography.Text>{row.reason}</Typography.Text>
-                                {row.repository_url ? (
-                                  <Typography.Link
-                                    href={row.repository_url}
-                                    target="_blank"
-                                  >
-                                    仓库链接
-                                  </Typography.Link>
-                                ) : null}
-                              </Space>
-                            ),
-                          },
-                          actions: {
-                            render: (_, row) =>
-                              row.template_id
-                                ? [
-                                    <Button
-                                      key="import-template"
-                                      type="link"
-                                      loading={
-                                        importingTemplateId === row.template_id
-                                      }
-                                      onClick={() =>
-                                        handleImportTemplateFromSuggestions(
-                                          String(row.template_id)
-                                        )
-                                      }
-                                    >
-                                      导入对应默认模板
-                                    </Button>,
-                                  ]
-                                : [
-                                    <Button
-                                      key="import-market"
-                                      type="link"
-                                      loading={marketDraftingName === row.name}
-                                      onClick={() =>
-                                        handleImportMarketMcp(row.name)
-                                      }
-                                    >
-                                      直接导入市场 MCP
-                                    </Button>,
-                                  ],
-                          },
-                        }}
                       />
                     </div>
                   ) : null}
@@ -768,10 +457,7 @@ export default () => {
                           </Typography.Text>
                         )}
                         <Space wrap>
-                          <Button
-                            type="link"
-                            onClick={() => openRunTimeline(run)}
-                          >
+                          <Button type="link" onClick={() => openRunTimeline(run)}>
                             查看时间线
                           </Button>
                           {run.conversation_id && (
@@ -797,72 +483,43 @@ export default () => {
         <ModalForm
           title={editingTask?.id ? "编辑任务" : "创建任务"}
           open={!!editingTask}
-          onOpenChange={(v) => !v && setEditingTask(null)}
+          onOpenChange={(visible) => !visible && setEditingTask(null)}
           modalProps={{ destroyOnHidden: true }}
           initialValues={editingTask || {}}
           onFinish={async (values) => {
-            if (editingTask?.id) {
-              await updateAgentTask(editingTask.id, values);
-            } else {
-              await createAgentTask(values);
+            const payload = {
+              name: String(values.name || "").trim(),
+              system_prompt: String(values.system_prompt || "").trim(),
+            };
+
+            try {
+              if (editingTask?.id) {
+                await updateAgentTask(editingTask.id, payload);
+              } else {
+                await createAgentTask(payload);
+              }
+              messageApi.success("保存成功");
+              loadData();
+              setEditingTask(null);
+              return true;
+            } catch (error: any) {
+              messageApi.error(error?.message || "保存失败");
+              return false;
             }
-            messageApi.success("保存成功");
-            loadData();
-            setEditingTask(null);
-            return true;
           }}
         >
           <ProFormText
             name="name"
             label="任务名称"
-            placeholder="如：翻译专家、技术调研、网页巡检"
+            placeholder="如：技术调研、日报整理、需求拆解"
             rules={[{ required: true }]}
           />
-          <ProFormText name="description" label="简介" />
           <ProFormTextArea
             name="system_prompt"
             label="核心 System Prompt"
-            placeholder="描述此技能的具体逻辑、约束和输出格式"
+            placeholder="描述这个任务的执行逻辑、约束和输出格式"
             rules={[{ required: true }]}
-          />
-
-          <ProFormSelect
-            name="model_id"
-            label="指定模型"
-            placeholder="留空即使用默认模型"
-            options={(Array.isArray(availableModels)
-              ? availableModels
-              : []
-            ).map((m) => ({
-              label: m.display_name || m.model_id,
-              value: m.model_id,
-            }))}
-          />
-
-          <ProFormSelect
-            name="skill_ids"
-            label="关联技能"
-            mode="multiple"
-            options={(Array.isArray(skills) ? skills : []).map((s) => ({
-              label: s.name,
-              value: s.id,
-            }))}
-          />
-
-          <ProFormSelect
-            name="tool_names"
-            label="启用工具"
-            mode="multiple"
-            placeholder="从 MCP 服务器中选择要启用的具体工具"
-            options={(Array.isArray(availableTools) ? availableTools : []).map(
-              (t) => ({
-                label: t?.function?.name || "Unknown Tool",
-                value: t?.function?.name || "unknown",
-              })
-            )}
-            fieldProps={{
-              mode: "multiple", // 改回 multiple，也可以保留 tags 但已有选项
-            }}
+            fieldProps={{ rows: 10 }}
           />
         </ModalForm>
 
@@ -878,7 +535,6 @@ export default () => {
                 requirement: String(values.requirement || "").trim(),
                 auto_create: Boolean(values.auto_create),
               });
-
               setGenerationResult(result);
 
               if (result.task) {
@@ -889,13 +545,8 @@ export default () => {
               }
 
               setEditingTask({
-                ...(result.draft || {}),
-                skill_ids: Array.isArray(result.draft?.skill_ids)
-                  ? result.draft.skill_ids
-                  : [],
-                tool_names: Array.isArray(result.draft?.tool_names)
-                  ? result.draft.tool_names
-                  : [],
+                name: result.draft?.name || "",
+                system_prompt: result.draft?.system_prompt || "",
               });
               messageApi.success("已生成任务草稿");
               setGeneratorOpen(false);
@@ -914,7 +565,7 @@ export default () => {
           <ProFormTextArea
             name="requirement"
             label="自然语言需求"
-            placeholder="例如：做一个技术调研 Agent，先理解需求，再拆解关键能力，研究市场上可用的 MCP，优先复用现有技能和工具，最后输出调研报告。"
+            placeholder="例如：做一个技术调研任务，先理解目标，再拆解问题，最后输出结构化结论。"
             rules={[{ required: true, message: "请输入任务需求" }]}
             fieldProps={{ rows: 6 }}
           />
@@ -927,9 +578,7 @@ export default () => {
         </ModalForm>
 
         <Modal
-          title={
-            runModalTask ? `Run & Debug · ${runModalTask.name}` : "Run & Debug"
-          }
+          title={runModalTask ? `Run · ${runModalTask.name}` : "Run"}
           open={!!runModalTask}
           onCancel={closeRunModal}
           onOk={handleRunTask}
@@ -952,27 +601,18 @@ export default () => {
                 <Space direction="vertical" size={10} style={{ width: "100%" }}>
                   <Typography.Text strong>运行上下文</Typography.Text>
                   <Space wrap>
-                    {(runModalTask.skill_ids || []).map((sid) => {
-                      const skill = skills.find((item) => item.id === sid);
-                      return (
-                        <Tag key={sid} color="orange">
-                          {skill?.name || `Skill ${sid}`}
-                        </Tag>
-                      );
-                    })}
-                    {(runModalTask.tool_names || []).map((name) => (
-                      <Tag key={name} color="cyan">
-                        {name}
-                      </Tag>
-                    ))}
-                    {!runModalTask.skill_ids?.length &&
-                      !runModalTask.tool_names?.length && <Tag>无额外挂载</Tag>}
+                    <Tag color="orange">
+                      {enabledSkills.length} 个已启用 Skill
+                    </Tag>
+                    <Tag color="cyan">
+                      {enabledMcpServers.length} 个已启用 MCP
+                    </Tag>
                   </Space>
                   <Typography.Paragraph
                     type="secondary"
                     style={{ marginBottom: 0 }}
                   >
-                    {runModalTask.description || "当前任务未填写简介。"}
+                    本任务不会单独指定模型、Skills 或工具，默认直接继承当前用户的全局启用配置。
                   </Typography.Paragraph>
                 </Space>
               </Card>
@@ -997,9 +637,7 @@ export default () => {
                   description={
                     <Space direction="vertical" size={8}>
                       <Typography.Text type="secondary">
-                        {runResult.finalResponse
-                          ? runResult.finalResponse
-                          : "本次运行未生成最终总结，建议直接进入聊天页查看完整工具轨迹。"}
+                        任务已经在后台开始执行，不会再阻塞当前页面。你可以直接进入会话查看实时轨迹，或在下方时间线里刷新运行状态。
                       </Typography.Text>
                       <div>
                         <Button
@@ -1013,25 +651,9 @@ export default () => {
                         </Button>
                         <Button
                           type="link"
-                          style={{ paddingInline: 0, marginLeft: 12 }}
-                          onClick={() => {
-                            const matchedRun = taskRuns.find(
-                              (item) => item.id === runResult.runId
-                            );
-                            openRunTimeline(
-                              matchedRun || {
-                                id: runResult.runId,
-                                task_id: runModalTask.id,
-                                task_name: runModalTask.name,
-                                trigger_source: "manual",
-                                status: "success",
-                                conversation_id: runResult.conversationId,
-                                final_response: runResult.finalResponse,
-                              }
-                            );
-                          }}
+                          onClick={() => loadRuns()}
                         >
-                          查看时间线
+                          刷新时间线
                         </Button>
                       </div>
                     </Space>
@@ -1043,105 +665,62 @@ export default () => {
         </Modal>
 
         <Drawer
-          title={
-            selectedRun
-              ? `运行时间线 · ${
-                  selectedRun.task_name || `Task ${selectedRun.task_id}`
-                }`
-              : "运行时间线"
-          }
-          width={560}
+          title={selectedRun ? `运行时间线 · #${selectedRun.id}` : "运行时间线"}
           open={!!selectedRun}
-          onClose={closeRunTimeline}
-          destroyOnHidden
+          onClose={() => {
+            setSelectedRun(null);
+            setSelectedRunEvents([]);
+          }}
+          width={640}
         >
-          {selectedRun && (
+          {selectedRun ? (
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <Card size="small">
-                <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                  <Space wrap>
-                    {formatTriggerSource(selectedRun.trigger_source)}
-                    {formatRunStatus(selectedRun.status)}
-                    <Typography.Text type="secondary">
-                      开始于 {formatDateTime(selectedRun.started_at)}
-                    </Typography.Text>
-                  </Space>
+                <Space direction="vertical" size={4}>
+                  <Typography.Text strong>
+                    {selectedRun.task_name || `Task ${selectedRun.task_id}`}
+                  </Typography.Text>
                   <Typography.Text type="secondary">
-                    耗时{" "}
+                    开始于 {formatDateTime(selectedRun.started_at)} · 耗时{" "}
                     {formatDuration(
                       selectedRun.started_at,
                       selectedRun.finished_at
                     )}
                   </Typography.Text>
-                  {selectedRun.final_response && (
-                    <Typography.Paragraph style={{ marginBottom: 0 }}>
-                      {selectedRun.final_response}
-                    </Typography.Paragraph>
-                  )}
-                  {selectedRun.error_message && (
-                    <Typography.Text type="danger">
-                      {selectedRun.error_message}
-                    </Typography.Text>
-                  )}
-                  {selectedRun.conversation_id && (
-                    <Button
-                      type="link"
-                      style={{ paddingInline: 0 }}
-                      onClick={() =>
-                        openConversation(String(selectedRun.conversation_id))
-                      }
-                    >
-                      打开关联会话
-                    </Button>
-                  )}
+                  <Space wrap>
+                    {formatTriggerSource(selectedRun.trigger_source)}
+                    {formatRunStatus(selectedRun.status)}
+                  </Space>
                 </Space>
               </Card>
 
               {runEventsLoading ? (
-                <div style={{ padding: "32px 0", textAlign: "center" }}>
+                <div style={{ textAlign: "center", padding: "24px 0" }}>
                   <Spin />
                 </div>
               ) : selectedRunEvents.length === 0 ? (
-                <Empty description="暂无时间线事件" />
+                <Empty description="暂无事件明细" />
               ) : (
                 <Timeline
                   items={selectedRunEvents.map((event) => ({
-                    color:
-                      event.event_type === "run_failed"
-                        ? "red"
-                        : event.event_type === "tool_failed"
-                        ? "red"
-                        : event.event_type === "forced_summary"
-                        ? "orange"
-                        : event.event_type === "run_completed"
-                        ? "green"
-                        : "blue",
                     children: (
-                      <Space
-                        direction="vertical"
-                        size={2}
-                        style={{ width: "100%" }}
-                      >
-                        <Space wrap>
-                          <Typography.Text strong>
-                            {event.title}
-                          </Typography.Text>
+                      <Space direction="vertical" size={4}>
+                        <Typography.Text strong>{event.title}</Typography.Text>
+                        {event.content ? (
                           <Typography.Text type="secondary">
-                            {formatDateTime(event.created_at)}
-                          </Typography.Text>
-                        </Space>
-                        {event.content && (
-                          <Typography.Paragraph style={{ marginBottom: 0 }}>
                             {event.content}
-                          </Typography.Paragraph>
-                        )}
+                          </Typography.Text>
+                        ) : null}
+                        <Typography.Text type="secondary">
+                          {formatDateTime(event.created_at)}
+                        </Typography.Text>
                       </Space>
                     ),
                   }))}
                 />
               )}
             </Space>
-          )}
+          ) : null}
         </Drawer>
       </div>
     </ConfigProvider>

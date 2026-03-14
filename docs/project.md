@@ -1,11 +1,11 @@
-# cowhouse (CW) 项目说明
+# workhorse (CW) 项目说明
 
 > 最后更新：2026-03-14  
 > 状态：当前实现已切换为桌面优先架构
 
 ## 1. 项目定位
 
-`cowhouse` 是一个本地优先的个人 AI Assistant 工作台。产品目标不是做多租户 SaaS，而是把聊天、工具、技能、任务和调度统一到一台机器上的桌面应用里，强调：
+`workhorse` 是一个本地优先的个人 AI Assistant 工作台。产品目标不是做多租户 SaaS，而是把聊天、工具、技能、任务和调度统一到一台机器上的桌面应用里，强调：
 
 - 本地可控：默认 SQLite，本地 Node sidecar，本地账号上下文
 - 模块化扩展：MCP、Skills、Agent Tasks、Cron Jobs 可独立演进

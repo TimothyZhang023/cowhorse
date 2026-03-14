@@ -1,8 +1,13 @@
 import crypto from "crypto";
 
 // 建议从环境变量获取，如果没有则使用固定默认值（不推荐生产环境这样做，但作为演进步骤先实现逻辑）
-const ENCRYPTION_KEY =
-  process.env.ENCRYPTION_KEY || "cowhouse-api-key-secret-32-chars"; // 必须是 32 位
+const ENCRYPTION_KEY_RAW =
+  process.env.ENCRYPTION_KEY || "workhorse-api-key-secret-32-chars";
+// 使用 SHA-256 确保 Key 始终是 32 字节，避免 "Invalid key length" 错误
+const ENCRYPTION_KEY = crypto
+  .createHash("sha256")
+  .update(ENCRYPTION_KEY_RAW)
+  .digest();
 const IV_LENGTH = 16;
 
 export function encrypt(text) {

@@ -70,4 +70,50 @@ describe("database migrations", () => {
     expect(columns).toContain("source_refreshed_at");
     expect(indexes).toContain("idx_skills_source_lookup");
   });
+
+  it("adds context_window to legacy conversations tables", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cw-db-migrate-"));
+    const dbPath = path.join(tempRoot, "legacy-conversations.db");
+    tempRoots.push(tempRoot);
+
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid TEXT NOT NULL,
+        title TEXT NOT NULL,
+        system_prompt TEXT DEFAULT '',
+        tool_names TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    legacyDb.close();
+
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `process.env.DB_PATH = ${JSON.stringify(
+          dbPath
+        )}; await import(${JSON.stringify(
+          path.resolve("/Users/zts1993/work/work/server/models/database.js")
+        )});`,
+      ],
+      {
+        cwd: "/Users/zts1993/work/work",
+        stdio: "pipe",
+      }
+    );
+
+    const migratedDb = new Database(dbPath, { readonly: true });
+    const columns = migratedDb
+      .prepare("PRAGMA table_info(conversations)")
+      .all()
+      .map((column) => column.name);
+    migratedDb.close();
+
+    expect(columns).toContain("context_window");
+  });
 });

@@ -89,7 +89,7 @@ function buildUnderstandingMessages(requirement, existingSkills, installedServer
     {
       role: "system",
       content:
-        "你是 Cowhouse 的任务编排分析器。你必须先理解需求，再拆解能力，再产出市场检索关键词。只返回 JSON，不要输出 Markdown。结构固定为：{\"summary\":\"\",\"workflow_steps\":[],\"capability_breakdown\":[],\"search_queries\":[],\"existing_skill_ids\":[]}。existing_skill_ids 只能从给定技能 ID 中选择。",
+        "你是 Workhorse 的任务编排分析器。你必须先理解需求，再拆解能力，再产出市场检索关键词。只返回 JSON，不要输出 Markdown。结构固定为：{\"summary\":\"\",\"workflow_steps\":[],\"capability_breakdown\":[],\"search_queries\":[],\"existing_skill_ids\":[]}。existing_skill_ids 只能从给定技能 ID 中选择。",
     },
     {
       role: "user",
@@ -127,7 +127,7 @@ function buildSynthesisMessages({
     {
       role: "system",
       content:
-        "你是 Cowhouse 的 ReAct 任务编排代理。你的职责是根据需求分析、市场 MCP 检索结果和当前已安装工具，生成一个可执行的任务蓝图。你必须只返回 JSON，不要输出 Markdown。结构固定为：{\"task\":{\"name\":\"\",\"description\":\"\",\"system_prompt\":\"\",\"skill_ids\":[],\"tool_names\":[],\"model_id\":\"\"},\"suggested_skills\":[],\"recommended_mcp_template_ids\":[],\"market_mcp_recommendations\":[]}。约束：1. task.tool_names 只能从 available_tools 里选择。2. task.skill_ids 只能从 existing_skills 的 ID 里选择。3. suggested_skills 结构为 {name,description,prompt,tools}。4. recommended_mcp_template_ids 只能从 default_templates 里选。5. market_mcp_recommendations 只保留 3-5 个最相关结果，每项结构为 {name,title,transport,reason,repository_url,remote_url,template_id}。",
+        "你是 Workhorse 的 ReAct 任务编排代理。你的职责是根据需求分析、市场 MCP 检索结果和当前已安装工具，生成一个可执行的任务蓝图。你必须只返回 JSON，不要输出 Markdown。结构固定为：{\"task\":{\"name\":\"\",\"description\":\"\",\"system_prompt\":\"\",\"skill_ids\":[],\"tool_names\":[],\"model_id\":\"\"},\"suggested_skills\":[],\"recommended_mcp_template_ids\":[],\"market_mcp_recommendations\":[]}。约束：1. task.tool_names 只能从 available_tools 里选择。2. task.skill_ids 只能从 existing_skills 的 ID 里选择。3. suggested_skills 结构为 {name,description,prompt,tools}。4. recommended_mcp_template_ids 只能从 default_templates 里选。5. market_mcp_recommendations 只保留 3-5 个最相关结果，每项结构为 {name,title,transport,reason,repository_url,remote_url,template_id}。",
     },
     {
       role: "user",

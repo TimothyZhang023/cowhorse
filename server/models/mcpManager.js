@@ -1,6 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import { getMcpServer, listMcpServers } from "./database.js";
 
 // Global map to hold connected MCP clients
@@ -8,6 +10,200 @@ import { getMcpServer, listMcpServers } from "./database.js";
 const mcpClients = new Map();
 // Track in-progress connect attempts to prevent races
 const mcpConnecting = new Map();
+
+export const BUILTIN_SHELL_SERVER_ID = "__builtin_shell__";
+export const BUILTIN_SHELL_TOOL_NAME = "shell_execute";
+const BUILTIN_SHELL_MAX_OUTPUT_CHARS = 24000;
+const BUILTIN_SHELL_DEFAULT_TIMEOUT_MS = 20000;
+const BUILTIN_SHELL_MAX_TIMEOUT_MS = 120000;
+
+function truncateShellOutput(value, maxLength = BUILTIN_SHELL_MAX_OUTPUT_CHARS) {
+  const text = String(value || "");
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength)}\n...<output truncated>`;
+}
+
+function resolveShellWorkingDirectory(inputCwd) {
+  const workspaceRoot = process.cwd();
+  const rawCwd = String(inputCwd || "").trim();
+
+  if (!rawCwd) {
+    return workspaceRoot;
+  }
+
+  const resolved = path.isAbsolute(rawCwd)
+    ? path.normalize(rawCwd)
+    : path.resolve(workspaceRoot, rawCwd);
+
+  return resolved;
+}
+
+function getShellLaunchConfig(command) {
+  const normalizedCommand = String(command || "").trim();
+  if (!normalizedCommand) {
+    throw new Error("shell_execute 缺少 command");
+  }
+
+  if (process.platform === "win32") {
+    return {
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", normalizedCommand],
+    };
+  }
+
+  const shell = process.env.SHELL || "/bin/zsh";
+  return {
+    command: shell,
+    args: ["-lc", normalizedCommand],
+  };
+}
+
+export function getBuiltInTools() {
+  return [
+    {
+      type: "function",
+      function: {
+        name: BUILTIN_SHELL_TOOL_NAME,
+        description:
+          "执行本机 shell 命令。适用于查看文件、运行 git/node/npm/python 等命令、构建和调试当前工作目录中的项目。",
+        parameters: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "要执行的 shell 命令，例如 `pwd`、`ls -la`、`git status`。",
+            },
+            cwd: {
+              type: "string",
+              description:
+                "可选工作目录。相对路径将基于当前 workspace 解析；留空时默认使用当前 workspace。",
+            },
+            timeout_ms: {
+              type: "integer",
+              description:
+                "可选超时时间，单位毫秒。默认 20000，最大 120000。",
+              minimum: 1000,
+              maximum: BUILTIN_SHELL_MAX_TIMEOUT_MS,
+            },
+          },
+          required: ["command"],
+          additionalProperties: false,
+        },
+      },
+      _mcp_server_id: BUILTIN_SHELL_SERVER_ID,
+    },
+  ];
+}
+
+export async function executeBuiltInShellTool(args = {}) {
+  const commandText = String(args?.command || "").trim();
+  if (!commandText) {
+    throw new Error("shell_execute 缺少 command");
+  }
+
+  const cwd = resolveShellWorkingDirectory(args?.cwd);
+  const requestedTimeout = Number(args?.timeout_ms);
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.max(1000, Math.min(BUILTIN_SHELL_MAX_TIMEOUT_MS, Math.round(requestedTimeout)))
+    : BUILTIN_SHELL_DEFAULT_TIMEOUT_MS;
+  const launch = getShellLaunchConfig(commandText);
+
+  const result = await new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+
+    const child = spawn(launch.command, launch.args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        if (!child.killed) {
+          child.kill("SIGKILL");
+        }
+      }, 1000).unref?.();
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+      if (stdout.length > BUILTIN_SHELL_MAX_OUTPUT_CHARS * 2) {
+        stdout = stdout.slice(0, BUILTIN_SHELL_MAX_OUTPUT_CHARS * 2);
+      }
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+      if (stderr.length > BUILTIN_SHELL_MAX_OUTPUT_CHARS * 2) {
+        stderr = stderr.slice(0, BUILTIN_SHELL_MAX_OUTPUT_CHARS * 2);
+      }
+    });
+
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        code: Number.isInteger(code) ? code : null,
+        signal: signal || null,
+        stdout,
+        stderr,
+        timedOut,
+      });
+    });
+  });
+
+  const sections = [
+    `Command: ${commandText}`,
+    `CWD: ${cwd}`,
+    `Timeout(ms): ${timeoutMs}`,
+    `Timed out: ${result.timedOut ? "yes" : "no"}`,
+    `Exit code: ${result.code === null ? "null" : result.code}`,
+  ];
+
+  if (result.signal) {
+    sections.push(`Signal: ${result.signal}`);
+  }
+
+  sections.push("STDOUT:");
+  sections.push(truncateShellOutput(result.stdout || "(empty)"));
+  sections.push("STDERR:");
+  sections.push(truncateShellOutput(result.stderr || "(empty)"));
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: sections.join("\n"),
+      },
+    ],
+    metadata: {
+      command: commandText,
+      cwd,
+      timeout_ms: timeoutMs,
+      timed_out: result.timedOut,
+      exit_code: result.code,
+      signal: result.signal,
+      stdout: truncateShellOutput(result.stdout),
+      stderr: truncateShellOutput(result.stderr),
+    },
+  };
+}
 
 /**
  * Ensures an MCP server is connected and returns the client instance.
@@ -30,7 +226,7 @@ export async function getConnectedMcpClient(serverConfig) {
   const connectPromise = (async () => {
     const client = new Client(
       {
-        name: `cowhouse-client-${serverConfig.name}`,
+        name: `workhorse-client-${serverConfig.name}`,
         version: "1.0.0",
       },
       {
@@ -142,9 +338,9 @@ export async function getConnectedMcpClient(serverConfig) {
  * }
  */
 export async function getAllAvailableTools(uid) {
+  const tools = [...getBuiltInTools()];
   const servers = listMcpServers(uid);
   const enabledServers = servers.filter((s) => s.is_enabled === 1);
-  const tools = [];
 
   for (const serverConfig of enabledServers) {
     try {
@@ -180,6 +376,13 @@ export async function getAllAvailableTools(uid) {
  * Execute a specific tool on its associated MCP server.
  */
 export async function executeMcpTool(uid, serverId, toolName, args) {
+  if (
+    serverId === BUILTIN_SHELL_SERVER_ID &&
+    String(toolName || "") === BUILTIN_SHELL_TOOL_NAME
+  ) {
+    return executeBuiltInShellTool(args);
+  }
+
   const servers = listMcpServers(uid);
   const serverConfig = servers.find((s) => s.id === serverId);
 

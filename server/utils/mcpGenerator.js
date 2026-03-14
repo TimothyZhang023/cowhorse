@@ -100,7 +100,7 @@ export function buildMcpGenerationMessages(requirement) {
     {
       role: "system",
       content:
-        "你是 Cowhouse 的 MCP 接入助手。你的任务是根据自然语言需求生成可直接落库的 MCP 配置。你必须只返回一个 JSON 对象，不要输出 Markdown、解释或代码块。JSON 结构固定为：{\"name\":\"\",\"type\":\"stdio|sse\",\"command\":\"\",\"args\":[],\"url\":\"\",\"env\":{},\"headers\":{},\"auth\":null,\"is_enabled\":true}。规则：1. 只能返回 stdio 或 sse。2. 需要密钥时可以使用占位符，如 YOUR_API_KEY，不要编造真实密钥。3. stdio 必须给出 command 和 args 数组，并优先把 API_KEY 一类配置写入 env。4. sse 必须给出 url。5. 未使用字段保留空字符串、空数组、空对象或 null。",
+        "你是 Workhorse 的 MCP 接入助手。你的任务是根据自然语言需求生成可直接落库的 MCP 配置。你必须只返回一个 JSON 对象，不要输出 Markdown、解释或代码块。JSON 结构固定为：{\"name\":\"\",\"type\":\"stdio|sse\",\"command\":\"\",\"args\":[],\"url\":\"\",\"env\":{},\"headers\":{},\"auth\":null,\"is_enabled\":true}。规则：1. 只能返回 stdio 或 sse。2. 需要密钥时可以使用占位符，如 YOUR_API_KEY，不要编造真实密钥。3. stdio 必须给出 command 和 args 数组，并优先把 API_KEY 一类配置写入 env。4. sse 必须给出 url。5. 未使用字段保留空字符串、空数组、空对象或 null。",
     },
     {
       role: "user",

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tauri::{LogicalSize, Manager, Size, WebviewWindow};
 use tauri_plugin_shell::ShellExt;
 
@@ -36,6 +38,13 @@ fn fit_main_window(window: &WebviewWindow) -> tauri::Result<()> {
   Ok(())
 }
 
+fn project_root() -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .parent()
+    .expect("src-tauri should live under the project root")
+    .to_path_buf()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -51,13 +60,26 @@ pub fn run() {
       // Initialize shell plugin
       app.handle().plugin(tauri_plugin_shell::init())?;
 
-      // Spawn Node.js sidecar
-      let sidecar = app.shell()
-          .sidecar("cowhouse-server")
-          .expect("failed to create sidecar configuration");
+      // In `tauri dev`, use the current system Node so native addons match the local install.
+      let sidecar = if cfg!(debug_assertions) {
+        let repo_root = project_root();
+        let server_entry = repo_root.join("server.js");
+        let node_binary = std::env::var("WORKHORSE_NODE_BIN").unwrap_or_else(|_| "node".into());
+
+        app
+          .shell()
+          .command(node_binary)
+          .args([server_entry.to_string_lossy().into_owned()])
+          .current_dir(repo_root)
+      } else {
+        app
+          .shell()
+          .sidecar("workhorse-server")
+          .expect("failed to create sidecar configuration")
+      };
 
       let (mut rx, _child) = sidecar.spawn()
-          .expect("failed to spawn cowhouse-server sidecar");
+          .expect("failed to spawn workhorse-server sidecar");
 
       // Optional: log sidecar output
       tauri::async_runtime::spawn(async move {

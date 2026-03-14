@@ -6,12 +6,14 @@ import db, {
   createConversation,
   deleteConversation,
   deleteLastAssistantMessage,
+  getAppSetting,
   getConversation,
   getConversations,
-  getEndpointGroups,
   getMessages,
   getModels,
+  listSkills,
   logUsage,
+  updateConversationContextWindow,
   updateConversationSystemPrompt,
   updateConversationToolNames,
   updateConversationTitle,
@@ -19,10 +21,30 @@ import db, {
 } from "../models/database.js";
 import { executeMcpTool, getAllAvailableTools } from "../models/mcpManager.js";
 import { logger } from "../utils/logger.js";
+import { buildTaskSystemPrompt } from "../utils/agentPromptBuilder.js";
+import {
+  findModelConfigForEndpoint,
+  getEndpointCandidatesForModel,
+  getOrderedEndpointGroups,
+  mergeGenerationConfig,
+  resolveModelCandidates,
+} from "../utils/modelSelection.js";
 
 const router = Router();
 
 const titleSummaryInFlight = new Set();
+const GLOBAL_SYSTEM_PROMPT_MD_KEY = "global_system_prompt_markdown";
+const DEFAULT_CONVERSATION_AGENT_PROMPT = `
+你是 Workhorse 的对话 Agent。你不是普通聊天助手，而是一个会主动完成任务的执行代理。
+
+规则：
+1. 先理解用户目标，再决定是否需要工具。
+2. 如果需要查看本地项目、执行 git/node/npm/pnpm/python/测试/构建/脚本命令，优先调用 shell_execute。
+3. 只要还没完成任务，就继续调用工具、分析结果并推进，不要过早停下。
+4. 只有在你确认任务已经完成、或者明确说明因缺少权限/信息而无法继续时，才输出最终答复。
+5. 最终答复必须直接面向用户，清楚说明结果、依据和剩余阻塞项。
+6. 不要把内部思考过程当作最终结论；如果需要工具，就直接调用。
+`;
 
 export function normalizeMessageForClient(message) {
   if (
@@ -74,12 +96,13 @@ router.get("/", (req, res) => {
 
 router.post("/", (req, res) => {
   try {
-    const { title, tool_names } = req.body;
+    const { title, tool_names, context_window } = req.body;
     res.json(
       createConversation(
         req.uid,
         title,
-        Array.isArray(tool_names) ? tool_names : null
+        Array.isArray(tool_names) ? tool_names : null,
+        { contextWindow: context_window }
       )
     );
   } catch (error) {
@@ -90,10 +113,13 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { title, system_prompt, tool_names } = req.body;
+    const { title, system_prompt, tool_names, context_window } = req.body;
     if (title !== undefined) updateConversationTitle(id, req.uid, title);
     if (system_prompt !== undefined)
       updateConversationSystemPrompt(id, req.uid, system_prompt);
+    if (context_window !== undefined) {
+      updateConversationContextWindow(id, req.uid, context_window);
+    }
     if (tool_names !== undefined) {
       updateConversationToolNames(
         id,
@@ -197,16 +223,37 @@ function buildMessages(history, systemPrompt) {
   return result;
 }
 
+export function buildConversationSystemPrompt(uid, conversation) {
+  const enabledSkills = listSkills(uid).filter(
+    (skill) => Number(skill.is_enabled) === 1
+  );
+  const globalPromptMarkdown = getAppSetting(
+    uid,
+    GLOBAL_SYSTEM_PROMPT_MD_KEY,
+    process.env.GLOBAL_SYSTEM_PROMPT_MD || ""
+  );
+
+  return buildTaskSystemPrompt({
+    taskSystemPrompt: [
+      DEFAULT_CONVERSATION_AGENT_PROMPT.trim(),
+      String(conversation?.system_prompt || "").trim(),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    taskSkills: enabledSkills,
+    globalMarkdown: globalPromptMarkdown,
+  });
+}
+
 /**
  * 获取带 Fallback 的 OpenAI client
  * 1. 优先使用默认 Endpoint
  * 2. 如果失败，自动切换到其他 Endpoint
  */
 function getEndpoints(uid) {
-  const groups = getEndpointGroups(uid);
+  const groups = getOrderedEndpointGroups(uid);
   if (!groups.length) return [];
-  // 默认的排首位
-  return groups.sort((a, b) => b.is_default - a.is_default);
+  return groups;
 }
 
 function buildFallbackTitleFromUserText(text, maxLength = 12) {
@@ -373,15 +420,25 @@ function normalizeGenerationConfig(input = {}) {
   const temperature = toNumber(input.temperature);
   const topP = toNumber(input.top_p);
   const maxTokens = toNumber(input.max_tokens);
+  const presencePenalty = toNumber(input.presence_penalty);
+  const frequencyPenalty = toNumber(input.frequency_penalty);
   const hasTemperature = temperature !== undefined;
   const hasTopP = topP !== undefined;
   const hasMaxTokens = maxTokens !== undefined;
+  const hasPresencePenalty = presencePenalty !== undefined;
+  const hasFrequencyPenalty = frequencyPenalty !== undefined;
   const shouldOmitMaxTokens = hasMaxTokens && maxTokens <= 0;
 
   return {
     // 中性默认值：temperature=0.7, top_p=1
     temperature: hasTemperature ? Math.min(2, Math.max(0, temperature)) : 0.7,
     top_p: hasTopP ? Math.min(1, Math.max(0, topP)) : 1,
+    ...(hasPresencePenalty
+      ? { presence_penalty: Math.min(2, Math.max(-2, presencePenalty)) }
+      : {}),
+    ...(hasFrequencyPenalty
+      ? { frequency_penalty: Math.min(2, Math.max(-2, frequencyPenalty)) }
+      : {}),
     ...(hasMaxTokens && !shouldOmitMaxTokens
       ? { max_tokens: Math.round(Math.min(8192, Math.max(64, maxTokens))) }
       : {}),
@@ -651,14 +708,66 @@ function finalizeSse(res) {
   res.end();
 }
 
+function serializeDebugValue(value, maxLength = 12000) {
+  try {
+    const serialized =
+      typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    if (serialized.length <= maxLength) {
+      return serialized;
+    }
+    return `${serialized.slice(0, maxLength)}\n...<truncated>`;
+  } catch (error) {
+    return String(value);
+  }
+}
+
+function emitDebugSse(res, enabled, payload = {}) {
+  if (!enabled || res.writableEnded) {
+    return;
+  }
+
+  res.write(
+    `data: ${JSON.stringify({
+      type: "debug",
+      timestamp: new Date().toISOString(),
+      ...payload,
+    })}\n\n`
+  );
+}
+
+async function requestForcedFinalChatResponse({
+  client,
+  modelId,
+  messages,
+  endpointGenerationConfig,
+}) {
+  const completion = await client.chat.completions.create({
+    model: modelId,
+    messages: [
+      ...messages,
+      {
+        role: "user",
+        content:
+          "请停止继续调用工具，基于现有上下文和工具结果直接给出最终答复。格式：结果、依据、未完成项（如无写“无”）。",
+      },
+    ],
+    ...mergeGenerationConfig(endpointGenerationConfig, { max_tokens: 2048 }),
+  });
+
+  return String(completion.choices?.[0]?.message?.content || "").trim();
+}
+
 async function streamWithFallback(uid, model, messages, res, opts = {}) {
   const endpoints = getEndpoints(uid);
+  const modelCandidates = resolveModelCandidates(uid, model);
+  const debugEnabled = Boolean(opts.debug);
   const requestLog = logger.child({
     route: "conversations.stream",
     uid,
     conversationId: opts.conversationId,
     source: opts.source || "chat",
-    model,
+    requestedModel: model,
+    modelCandidates,
   });
   const persistAssistantFailure = (aiMsgId, fallbackText) => {
     if (!aiMsgId) return;
@@ -680,6 +789,20 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
     },
     "Starting upstream stream request"
   );
+  emitDebugSse(res, debugEnabled, {
+    phase: "request_init",
+    requested_model: model || "",
+    model_candidates: modelCandidates,
+    conversation_context_window: opts.conversationContextWindow ?? null,
+    endpoint_candidates: endpoints.map((endpoint) => ({
+      id: endpoint.id,
+      name: endpoint.name,
+      base_url: endpoint.base_url,
+      provider: endpoint.provider,
+    })),
+    generation_config: opts.generationConfig || {},
+    request_messages: messages,
+  });
 
   if (!endpoints.length) {
     const fallbackText = "⚠️ 未配置可用 API Endpoint，请先到设置里配置。";
@@ -690,6 +813,15 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
     );
     return false;
   }
+  if (!modelCandidates.length) {
+    const fallbackText = "⚠️ 当前没有可用模型，请先在端点管理中启用模型。";
+    persistAssistantFailure(opts.aiMsgId, fallbackText);
+    requestLog.warn("No enabled models configured");
+    res.write(
+      `data: ${JSON.stringify({ error: "请先在端点管理中启用至少一个模型" })}\n\n`
+    );
+    return false;
+  }
 
   // Get tools from MCP
   const allTools = await getAllAvailableTools(uid).catch((e) => {
@@ -697,93 +829,134 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
     return [];
   });
   const allowedToolNames = Array.isArray(opts.allowedToolNames)
-    ? new Set(opts.allowedToolNames)
+    ? new Set(
+        opts.allowedToolNames.map((item) => String(item || "").trim()).filter(Boolean)
+      )
     : null;
-  const filteredTools =
-    allowedToolNames === null
-      ? allTools
-      : allTools.filter((tool) => allowedToolNames.has(tool.function?.name));
+  const filteredTools = allowedToolNames
+    ? allTools.filter((tool) => allowedToolNames.has(tool.function.name))
+    : allTools;
   // Strip internal _mcp_server_id field before sending to OpenAI
   const requestTools =
     filteredTools.length > 0
       ? filteredTools.map(({ _mcp_server_id, ...t }) => t)
       : undefined;
 
-  let maxToolLoops = 5;
+  let maxToolLoops = 8;
   let currentLoop = 0;
 
   async function executeTurn(currentMessages, currentAiMsgId) {
     if (currentLoop >= maxToolLoops) {
       res.write(
-        `data: ${JSON.stringify({ error: "超出最大工具调用次数" })}\n\n`
+        `data: ${JSON.stringify({
+          notice: "工具调用次数达到上限，正在基于现有结果生成最终答复",
+        })}\n\n`
       );
-      return false;
+      return "_FORCE_FINAL_RESPONSE_";
     }
     currentLoop++;
 
     let lastError = null;
-    for (const ep of endpoints) {
-      const baseUrlCandidates = normalizeBaseUrlCandidates(ep.base_url);
-      for (const baseURL of baseUrlCandidates) {
-        let triedWithoutStreamOptions = false;
-        try {
-          const client = new OpenAI({ apiKey: ep.api_key, baseURL });
-          const endpointGenerationConfig = resolveEndpointGenerationConfig(
-            ep,
-            opts.generationConfig
-          );
-          const baseParams = {
-            model,
-            messages: currentMessages,
-            stream: true,
-            tools: requestTools,
-            ...endpointGenerationConfig,
-          };
-
-          let stream;
+    for (const modelId of modelCandidates) {
+      for (const ep of getEndpointCandidatesForModel(uid, modelId)) {
+        const baseUrlCandidates = normalizeBaseUrlCandidates(ep.base_url);
+        for (const baseURL of baseUrlCandidates) {
+          let triedWithoutStreamOptions = false;
           try {
-            stream = await client.chat.completions.create({
-              ...baseParams,
-              stream_options: { include_usage: true },
+            const client = new OpenAI({ apiKey: ep.api_key, baseURL });
+            const endpointModelConfig =
+              findModelConfigForEndpoint(ep.id, uid, modelId)
+                ?.generation_config || {};
+            const endpointGenerationConfig = resolveEndpointGenerationConfig(
+              ep,
+              mergeGenerationConfig(
+                endpointModelConfig,
+                opts.generationConfig || {}
+              )
+            );
+            const baseParams = {
+              model: modelId,
+              messages: currentMessages,
+              stream: true,
+              tools: requestTools,
+              ...endpointGenerationConfig,
+            };
+            emitDebugSse(res, debugEnabled, {
+              phase: "attempt_start",
+              model_id: modelId,
+              endpoint: {
+                id: ep.id,
+                name: ep.name,
+                provider: ep.provider,
+                base_url: baseURL,
+              },
+              request: {
+                messages: currentMessages,
+                tools: requestTools,
+                generation_config: endpointGenerationConfig,
+              },
             });
-          } catch (error) {
-            if (!isUnsupportedStreamOptionsError(error)) {
-              throw error;
+
+            let stream;
+            try {
+              stream = await client.chat.completions.create({
+                ...baseParams,
+                stream_options: { include_usage: true },
+              });
+            } catch (error) {
+              if (!isUnsupportedStreamOptionsError(error)) {
+                throw error;
+              }
+              triedWithoutStreamOptions = true;
+              requestLog.warn(
+                {
+                  modelId,
+                  endpointName: ep.name,
+                  baseURL,
+                  reason: getUpstreamErrorMessage(error),
+                },
+                "Upstream rejected stream_options, retrying without it"
+              );
+              emitDebugSse(res, debugEnabled, {
+                phase: "stream_options_retry",
+                model_id: modelId,
+                endpoint_name: ep.name,
+                base_url: baseURL,
+                error: getUpstreamErrorMessage(error),
+              });
+              stream = await client.chat.completions.create(baseParams);
             }
-            triedWithoutStreamOptions = true;
-            requestLog.warn(
+
+            requestLog.info(
               {
+                modelId,
                 endpointName: ep.name,
                 baseURL,
-                reason: getUpstreamErrorMessage(error),
+                messageCount: currentMessages.length,
+                hasTools: !!requestTools?.length,
+                retriedWithoutStreamOptions: triedWithoutStreamOptions,
+                generationConfig: endpointGenerationConfig,
               },
-              "Upstream rejected stream_options, retrying without it"
+              "Upstream stream connected"
             );
-            stream = await client.chat.completions.create(baseParams);
-          }
+            emitDebugSse(res, debugEnabled, {
+              phase: "stream_connected",
+              model_id: modelId,
+              endpoint_name: ep.name,
+              base_url: baseURL,
+              retried_without_stream_options: triedWithoutStreamOptions,
+            });
 
-          requestLog.info(
-            {
-              endpointName: ep.name,
-              baseURL,
-              messageCount: currentMessages.length,
-              hasTools: !!requestTools?.length,
-              retriedWithoutStreamOptions: triedWithoutStreamOptions,
-              generationConfig: endpointGenerationConfig,
-            },
-            "Upstream stream connected"
-          );
-
-          let fullTextContent = "";
-          let toolCalls = [];
-          let promptTokens = 0;
-          let completionTokens = 0;
-          let chunkCount = 0;
-          let emptyTextChunkCount = 0;
-          let firstContentAt = null;
-          let lastFinishReason = null;
-          let reasoningOpen = false;
-          const observedDeltaKeys = new Set();
+            let fullTextContent = "";
+            let toolCalls = [];
+            let promptTokens = 0;
+            let completionTokens = 0;
+            let chunkCount = 0;
+            let emptyTextChunkCount = 0;
+            let firstContentAt = null;
+            let lastFinishReason = null;
+            let reasoningOpen = false;
+            const observedDeltaKeys = new Set();
 
           for await (const chunk of stream) {
             chunkCount++;
@@ -797,6 +970,13 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
             if (chunk?.error?.message) {
               throw new Error(chunk.error.message);
             }
+            emitDebugSse(res, debugEnabled, {
+              phase: "upstream_chunk",
+              model_id: modelId,
+              endpoint_name: ep.name,
+              base_url: baseURL,
+              chunk: serializeDebugValue(chunk),
+            });
 
             const { answerText, reasoningText } = extractStreamParts(
               choice,
@@ -875,40 +1055,53 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
             emitContentSse(res, closeThinkingTag);
           }
 
-          requestLog.info(
-            {
-              endpointName: ep.name,
-              baseURL,
-              chunkCount,
-              contentLength: fullTextContent.length,
-              emptyTextChunkCount,
-              toolCallCount: toolCalls.filter(Boolean).length,
-              promptTokens,
-              completionTokens,
-              lastFinishReason,
-              observedDeltaKeys: [...observedDeltaKeys],
-            },
-            "Upstream stream completed"
-          );
-
-          try {
-            if (promptTokens > 0) {
-              logUsage({
-                uid,
-                conversationId: opts.conversationId,
-                model,
+            requestLog.info(
+              {
+                modelId,
                 endpointName: ep.name,
+                baseURL,
+                chunkCount,
+                contentLength: fullTextContent.length,
+                emptyTextChunkCount,
+                toolCallCount: toolCalls.filter(Boolean).length,
                 promptTokens,
                 completionTokens,
-                source: opts.source || "chat",
-              });
-            }
-          } catch (logErr) {
-            requestLog.warn(
-              { err: logErr, endpointName: ep.name, baseURL },
-              "Failed to log usage"
+                lastFinishReason,
+                observedDeltaKeys: [...observedDeltaKeys],
+              },
+              "Upstream stream completed"
             );
-          }
+            emitDebugSse(res, debugEnabled, {
+              phase: "stream_completed",
+              model_id: modelId,
+              endpoint_name: ep.name,
+              base_url: baseURL,
+              chunk_count: chunkCount,
+              content_length: fullTextContent.length,
+              tool_call_count: toolCalls.filter(Boolean).length,
+              prompt_tokens: promptTokens,
+              completion_tokens: completionTokens,
+              finish_reason: lastFinishReason,
+            });
+
+            try {
+              if (promptTokens > 0) {
+                logUsage({
+                  uid,
+                  conversationId: opts.conversationId,
+                  model: modelId,
+                  endpointName: ep.name,
+                  promptTokens,
+                  completionTokens,
+                  source: opts.source || "chat",
+                });
+              }
+            } catch (logErr) {
+              requestLog.warn(
+                { err: logErr, modelId, endpointName: ep.name, baseURL },
+                "Failed to log usage"
+              );
+            }
 
           const finalToolCalls = toolCalls.filter(Boolean);
 
@@ -963,6 +1156,11 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
                   tool_name: funcName,
                 })}\n\n`
               );
+              emitDebugSse(res, debugEnabled, {
+                phase: "tool_running",
+                tool_name: funcName,
+                tool_arguments: funcArgsDecoded,
+              });
 
               let resultContent = "";
               const toolDef = filteredTools.find(
@@ -984,6 +1182,12 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
 
               const toolResultStr = `[TOOL_RESULT:${tc.id}:${funcName}]:${resultContent}`;
               addMessage(opts.conversationId, uid, "tool", toolResultStr);
+              emitDebugSse(res, debugEnabled, {
+                phase: "tool_result",
+                tool_name: funcName,
+                tool_call_id: tc.id,
+                result: serializeDebugValue(resultContent),
+              });
 
               currentMessages.push({
                 role: "tool",
@@ -1003,6 +1207,12 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
               );
               const errStr = `[TOOL_RESULT:${tc.id}:${tc.function.name}]:Error - ${err.message}`;
               addMessage(opts.conversationId, uid, "tool", errStr);
+              emitDebugSse(res, debugEnabled, {
+                phase: "tool_error",
+                tool_name: tc.function.name,
+                tool_call_id: tc.id,
+                error: err.message,
+              });
               currentMessages.push({
                 role: "tool",
                 tool_call_id: tc.id,
@@ -1021,6 +1231,24 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
           );
           const nextContent = await executeTurn(currentMessages, nextAiMsg.id);
 
+          if (nextContent === "_FORCE_FINAL_RESPONSE_") {
+            const forcedFinalText = await requestForcedFinalChatResponse({
+              client,
+              modelId,
+              messages: currentMessages,
+              endpointGenerationConfig,
+            });
+            if (!forcedFinalText) {
+              persistAssistantFailure(
+                nextAiMsg.id,
+                "⚠️ 工具调用达到上限，但未能整理出最终答复。"
+              );
+              return false;
+            }
+            updateMessage(nextAiMsg.id, uid, forcedFinalText);
+            emitContentSse(res, forcedFinalText);
+            return "_HANDLED_INTERNALLY_";
+          }
           if (nextContent === false) {
             persistAssistantFailure(
               nextAiMsg.id,
@@ -1032,25 +1260,39 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
             updateMessage(nextAiMsg.id, uid, nextContent);
           }
 
-          return "_HANDLED_INTERNALLY_";
-        } catch (error) {
-          lastError = error;
-          requestLog.warn(
-            {
-              endpointName: ep.name,
-              baseURL,
+            return "_HANDLED_INTERNALLY_";
+          } catch (error) {
+            lastError = error;
+            requestLog.warn(
+              {
+                modelId,
+                endpointName: ep.name,
+                baseURL,
+                error: getUpstreamErrorMessage(error),
+              },
+              "Upstream endpoint attempt failed"
+            );
+            emitDebugSse(res, debugEnabled, {
+              phase: "attempt_failed",
+              model_id: modelId,
+              endpoint_name: ep.name,
+              base_url: baseURL,
               error: getUpstreamErrorMessage(error),
-            },
-            "Upstream endpoint attempt failed"
-          );
+            });
+          }
         }
       }
 
-      if (endpoints.indexOf(ep) < endpoints.length - 1) {
-        res.write(
-          `data: ${JSON.stringify({ notice: "切换到备用端点中..." })}\n\n`
-        );
-      }
+      res.write(
+        `data: ${JSON.stringify({
+          notice: `模型 ${modelId} 不可用，尝试备用模型中...`,
+        })}\n\n`
+      );
+      emitDebugSse(res, debugEnabled, {
+        phase: "model_fallback",
+        model_id: modelId,
+        notice: `模型 ${modelId} 不可用，尝试备用模型中...`,
+      });
     }
 
     res.write(
@@ -1058,6 +1300,10 @@ async function streamWithFallback(uid, model, messages, res, opts = {}) {
         error: `所有 API 端点均不可用：${getUpstreamErrorMessage(lastError)}`,
       })}\n\n`
     );
+    emitDebugSse(res, debugEnabled, {
+      phase: "all_attempts_failed",
+      error: getUpstreamErrorMessage(lastError),
+    });
     persistAssistantFailure(
       opts.aiMsgId,
       `❌ 错误：所有 API 端点均不可用：${getUpstreamErrorMessage(lastError)}`
@@ -1074,6 +1320,7 @@ router.post("/:id/chat", async (req, res) => {
   const { id } = req.params;
   const { message, model, images } = req.body;
   const uid = req.uid;
+  const debug = Boolean(req.body?.debug);
   const generationConfig = normalizeGenerationConfig(req.body);
   const requestedModel = String(model || "").trim();
 
@@ -1091,11 +1338,6 @@ router.post("/:id/chat", async (req, res) => {
       },
       "Incoming chat request"
     );
-    if (!requestedModel) {
-      res.write(`data: ${JSON.stringify({ error: "请选择模型后再发送" })}\n\n`);
-      finalizeSse(res);
-      return;
-    }
     // 获取对话（含 system_prompt）
     const conversation = getConversation(id, uid);
     if (!conversation) {
@@ -1113,7 +1355,7 @@ router.post("/:id/chat", async (req, res) => {
     addMessage(id, uid, "user", storedContent);
 
     const history = getMessages(id, uid);
-    const systemPrompt = conversation?.system_prompt || "";
+    const systemPrompt = buildConversationSystemPrompt(uid, conversation);
     const messages = buildMessages(history, systemPrompt);
 
     const aiMsg = addMessage(id, uid, "assistant", "");
@@ -1127,8 +1369,10 @@ router.post("/:id/chat", async (req, res) => {
         conversationId: id,
         source: "chat",
         aiMsgId: aiMsg.id,
+        debug,
         generationConfig,
-        allowedToolNames: conversation?.tool_names,
+        conversationContextWindow: conversation?.context_window ?? null,
+        allowedToolNames: conversation?.tool_names ?? null,
       }
     );
 
@@ -1184,6 +1428,7 @@ router.post("/:id/regenerate", async (req, res) => {
   const { id } = req.params;
   const { model } = req.body;
   const uid = req.uid;
+  const debug = Boolean(req.body?.debug);
   const generationConfig = normalizeGenerationConfig(req.body);
   const requestedModel = String(model || "").trim();
 
@@ -1200,11 +1445,6 @@ router.post("/:id/regenerate", async (req, res) => {
       },
       "Incoming regenerate request"
     );
-    if (!requestedModel) {
-      res.write(`data: ${JSON.stringify({ error: "请选择模型后再重试" })}\n\n`);
-      finalizeSse(res);
-      return;
-    }
     const deleted = deleteLastAssistantMessage(id, uid);
     if (!deleted) {
       res.write(
@@ -1224,7 +1464,7 @@ router.post("/:id/regenerate", async (req, res) => {
     }
 
     const conversation = getConversation(id, uid);
-    const systemPrompt = conversation?.system_prompt || "";
+    const systemPrompt = buildConversationSystemPrompt(uid, conversation);
     const messages = buildMessages(history, systemPrompt);
     const aiMsg = addMessage(id, uid, "assistant", "");
 
@@ -1237,8 +1477,10 @@ router.post("/:id/regenerate", async (req, res) => {
         conversationId: id,
         source: "chat",
         aiMsgId: aiMsg.id,
+        debug,
         generationConfig,
-        allowedToolNames: conversation?.tool_names,
+        conversationContextWindow: conversation?.context_window ?? null,
+        allowedToolNames: conversation?.tool_names ?? null,
       }
     );
 
@@ -1273,6 +1515,7 @@ router.put("/:id/messages/:msgId", async (req, res) => {
   const { id, msgId } = req.params;
   const { content, model } = req.body;
   const uid = req.uid;
+  const debug = Boolean(req.body?.debug);
   const generationConfig = normalizeGenerationConfig(req.body);
   const requestedModel = String(model || "").trim();
 
@@ -1290,11 +1533,6 @@ router.put("/:id/messages/:msgId", async (req, res) => {
       },
       "Incoming edit-and-regenerate request"
     );
-    if (!requestedModel) {
-      res.write(`data: ${JSON.stringify({ error: "请选择模型后再重试" })}\n\n`);
-      finalizeSse(res);
-      return;
-    }
     const conversation = getConversation(id, uid);
     if (!conversation) {
       res.write(`data: ${JSON.stringify({ error: "对话不存在或无权限" })}\n\n`);
@@ -1323,7 +1561,7 @@ router.put("/:id/messages/:msgId", async (req, res) => {
 
     // 重新获取历史并生成
     const history = getMessages(id, uid);
-    const systemPrompt = conversation?.system_prompt || "";
+    const systemPrompt = buildConversationSystemPrompt(uid, conversation);
     const messages = buildMessages(history, systemPrompt);
     const aiMsg = addMessage(id, uid, "assistant", "");
 
@@ -1336,8 +1574,10 @@ router.put("/:id/messages/:msgId", async (req, res) => {
         conversationId: id,
         source: "chat",
         aiMsgId: aiMsg.id,
+        debug,
         generationConfig,
-        allowedToolNames: conversation?.tool_names,
+        conversationContextWindow: conversation?.context_window ?? null,
+        allowedToolNames: conversation?.tool_names ?? null,
       }
     );
 

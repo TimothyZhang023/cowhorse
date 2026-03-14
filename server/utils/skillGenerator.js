@@ -62,7 +62,7 @@ export function buildSkillGenerationMessages(requirement, availableToolNames = [
     {
       role: "system",
       content:
-        "你是 Cowhouse 的 Skill 设计器。你的任务是把自然语言需求转换为可复用的技能草稿。你必须只返回一个 JSON 对象，不要输出 Markdown、解释或代码块。JSON 结构固定为：{\"name\":\"\",\"description\":\"\",\"prompt\":\"\",\"examples\":[],\"tools\":[]}。其中 prompt 必须是可直接用于 System Prompt 增强的中文说明，强调边界、步骤、输出要求；tools 只能从提供的可用工具名里挑选；没有合适工具时返回空数组。",
+        "你是 Workhorse 的 Skill 设计器。你的任务是把自然语言需求转换为可复用的技能草稿。你必须只返回一个 JSON 对象，不要输出 Markdown、解释或代码块。JSON 结构固定为：{\"name\":\"\",\"description\":\"\",\"prompt\":\"\",\"examples\":[],\"tools\":[]}。其中 prompt 必须是可直接用于 System Prompt 增强的中文说明，强调边界、步骤、输出要求；tools 只能从提供的可用工具名里挑选；没有合适工具时返回空数组。",
     },
     {
       role: "user",

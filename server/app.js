@@ -67,7 +67,7 @@ export function createApp() {
   return app;
 }
 
-export function startServer(port = 8080) {
+export function startServer(port = 12621) {
   const app = createApp();
   const server = http.createServer(app);
 

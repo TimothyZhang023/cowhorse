@@ -1,4 +1,4 @@
-# Cowhorse Mac 单机版架构演进（Node 内核）
+# Workhorse Mac 单机版架构演进（Node 内核）
 
 ## 目标
 

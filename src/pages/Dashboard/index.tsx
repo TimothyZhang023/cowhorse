@@ -16,8 +16,12 @@ import {
   Col,
   ConfigProvider,
   Empty,
+  Progress,
   Row,
+  Space,
   Spin,
+  Tag,
+  Typography,
   theme as antdTheme,
 } from "antd";
 import { useEffect, useState } from "react";
@@ -37,6 +41,39 @@ type SystemOverviewData = {
     cron_jobs: number;
     mcp_servers: number;
     mcp_enabled: number;
+  };
+  health?: {
+    commands?: Array<{
+      name: string;
+      installed: boolean;
+      version?: string;
+      error?: string;
+    }>;
+    network?: Array<{
+      target: string;
+      reachable: boolean;
+      status?: number;
+      error?: string;
+    }>;
+  };
+  context_budget?: {
+    context_window: number;
+    compact_threshold: number;
+    compact_threshold_ratio: number;
+    static_tokens: number;
+    static_percentage: number;
+    remaining_budget: number;
+    remaining_percentage: number;
+    active_model?: {
+      model_id: string;
+      display_name: string;
+    } | null;
+    breakdown: Array<{
+      key: string;
+      label: string;
+      tokens: number;
+      percentage_of_window: number;
+    }>;
   };
   recommendations: string[];
 };
@@ -76,6 +113,14 @@ export default () => {
 
   const counts = overview?.counts;
   const runtime = overview?.runtime;
+  const commandChecks = overview?.health?.commands || [];
+  const networkChecks = overview?.health?.network || [];
+  const contextBudget = overview?.context_budget;
+  const segmentColors: Record<string, string> = {
+    global_prompt: "#2563eb",
+    skills: "#f59e0b",
+    mcp_tools: "#06b6d4",
+  };
 
   return (
     <ConfigProvider
@@ -103,7 +148,7 @@ export default () => {
               <div className="cw-dashboard-eyebrow">Dashboard</div>
               <h1>欢迎回来，{currentUser?.username || "CW 用户"}</h1>
               <p>
-                cowhouse 是你的个人助理 Agent 工作台，当前聚合了对话、工具、
+                workhorse 是你的个人助理 Agent 工作台，当前聚合了对话、工具、
                 任务与调度能力。
               </p>
             </div>
@@ -120,7 +165,7 @@ export default () => {
 
           <section className="cw-dashboard-main">
             <Row gutter={[16, 16]}>
-              <Col xs={24}>
+              <Col xs={24} lg={14}>
                 <Card className="cw-module-card">
                   <div className="cw-usage-header">
                     <div>
@@ -198,6 +243,185 @@ export default () => {
                         )}
                       </div>
                     </>
+                  )}
+                </Card>
+              </Col>
+
+              <Col xs={24} lg={10}>
+                <Card className="cw-module-card">
+                  <div className="cw-usage-header">
+                    <div>
+                      <h3>健康检查</h3>
+                      <p>关键命令、软件安装与外网连通性</p>
+                    </div>
+                  </div>
+                  {overviewLoading && !overview ? (
+                    <div className="cw-usage-loading">
+                      <Spin size="small" />
+                    </div>
+                  ) : (
+                    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                      <div>
+                        <Typography.Text strong>本地命令</Typography.Text>
+                        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                          {commandChecks.map((item) => (
+                            <div
+                              key={item.name}
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 12,
+                                alignItems: "center",
+                              }}
+                            >
+                              <div>
+                                <div>{item.name}</div>
+                                <Typography.Text type="secondary">
+                                  {item.installed
+                                    ? item.version || "已安装"
+                                    : item.error || "未安装"}
+                                </Typography.Text>
+                              </div>
+                              <Tag color={item.installed ? "success" : "error"}>
+                                {item.installed ? "正常" : "缺失"}
+                              </Tag>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <Typography.Text strong>网络连通性</Typography.Text>
+                        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                          {networkChecks.map((item) => (
+                            <div
+                              key={item.target}
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 12,
+                                alignItems: "center",
+                              }}
+                            >
+                              <div>
+                                <div>{item.target}</div>
+                                <Typography.Text type="secondary">
+                                  {item.reachable
+                                    ? `HTTP ${item.status || 200}`
+                                    : item.error || "不可达"}
+                                </Typography.Text>
+                              </div>
+                              <Tag color={item.reachable ? "success" : "warning"}>
+                                {item.reachable ? "可达" : "异常"}
+                              </Tag>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </Space>
+                  )}
+                </Card>
+              </Col>
+
+              <Col xs={24}>
+                <Card className="cw-module-card">
+                  <div className="cw-usage-header">
+                    <div>
+                      <h3>上下文预算</h3>
+                      <p>默认上下文窗口 256k；达到 70% 后 Agent 会先压缩历史上下文</p>
+                    </div>
+                    {contextBudget?.active_model ? (
+                      <Tag color="blue">
+                        {contextBudget.active_model.display_name ||
+                          contextBudget.active_model.model_id}
+                      </Tag>
+                    ) : null}
+                  </div>
+                  {!contextBudget ? (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="暂无上下文预算数据"
+                    />
+                  ) : (
+                    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                      <div className="cw-usage-grid">
+                        <div className="cw-usage-item">
+                          <div className="cw-usage-label">上下文窗口</div>
+                          <div className="cw-usage-value">
+                            {Math.round(contextBudget.context_window / 1024)}k
+                          </div>
+                        </div>
+                        <div className="cw-usage-item">
+                          <div className="cw-usage-label">压缩阈值</div>
+                          <div className="cw-usage-value">
+                            {Math.round(contextBudget.compact_threshold / 1024)}k
+                          </div>
+                        </div>
+                        <div className="cw-usage-item">
+                          <div className="cw-usage-label">静态占用</div>
+                          <div className="cw-usage-value">
+                            {contextBudget.static_percentage}%
+                          </div>
+                        </div>
+                        <div className="cw-usage-item">
+                          <div className="cw-usage-label">剩余运行预算</div>
+                          <div className="cw-usage-value">
+                            {contextBudget.remaining_percentage}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <Progress
+                        percent={Math.min(100, contextBudget.static_percentage)}
+                        strokeColor="#2563eb"
+                        trailColor={isDark ? "#1e293b" : "#e2e8f0"}
+                        format={(percent) => `静态上下文 ${percent}%`}
+                      />
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: 12,
+                          gridTemplateColumns:
+                            "repeat(auto-fit, minmax(220px, 1fr))",
+                        }}
+                      >
+                        {contextBudget.breakdown.map((item) => (
+                          <Card
+                            key={item.key}
+                            size="small"
+                            style={{
+                              background: isDark
+                                ? "rgba(15, 23, 42, 0.42)"
+                                : "#f8fafc",
+                            }}
+                          >
+                            <Space
+                              direction="vertical"
+                              size={8}
+                              style={{ width: "100%" }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  gap: 12,
+                                }}
+                              >
+                                <Typography.Text strong>{item.label}</Typography.Text>
+                                <Tag color="default">{item.tokens} tokens</Tag>
+                              </div>
+                              <Progress
+                                percent={Math.min(100, item.percentage_of_window)}
+                                strokeColor={segmentColors[item.key] || "#64748b"}
+                                trailColor={isDark ? "#1e293b" : "#e2e8f0"}
+                                format={(percent) => `${percent}%`}
+                              />
+                            </Space>
+                          </Card>
+                        ))}
+                      </div>
+                    </Space>
                   )}
                 </Card>
               </Col>

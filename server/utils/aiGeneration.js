@@ -1,11 +1,15 @@
 import OpenAI from "openai";
 import {
   PRESET_MODELS,
-  getDefaultEndpointGroup,
-  getEndpointGroups,
   getModels,
   logUsage,
 } from "../models/database.js";
+import {
+  getEndpointCandidatesForModel,
+  findModelConfigForEndpoint,
+  mergeGenerationConfig,
+  resolveEndpointModelPair,
+} from "./modelSelection.js";
 
 const PROVIDER_FALLBACK_MODELS = {
   openai: "gpt-4o-mini",
@@ -28,11 +32,26 @@ function normalizeBaseUrl(baseUrl) {
   return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
-export function resolveGenerationEndpoint(uid) {
-  return getDefaultEndpointGroup(uid) || getEndpointGroups(uid)[0] || null;
-}
+export function resolveGenerationModel(
+  uidOrEndpoint,
+  endpointOrModels = [],
+  maybeModels = []
+) {
+  const hasUid = typeof uidOrEndpoint === "string";
+  const uid = hasUid ? uidOrEndpoint : "";
+  const endpoint = hasUid ? endpointOrModels : uidOrEndpoint;
+  const models = hasUid ? maybeModels : endpointOrModels;
+  const preferredCandidates = uid ? resolveModelCandidates(uid) : [];
+  const enabledModels = Array.isArray(models)
+    ? models.filter((model) => model?.is_enabled !== 0)
+    : [];
 
-export function resolveGenerationModel(endpoint, models = []) {
+  for (const candidate of preferredCandidates) {
+    if (enabledModels.some((model) => model?.model_id === candidate)) {
+      return candidate;
+    }
+  }
+
   const availableModels = Array.isArray(models)
     ? models.filter((model) => model?.is_enabled !== 0)
     : [];
@@ -86,47 +105,69 @@ export async function runJsonGeneration({
   source,
   temperature = 0.3,
 }) {
-  const endpoint = resolveGenerationEndpoint(uid);
+  const { endpoint, modelId: preferredModelId } = resolveEndpointModelPair(uid);
   if (!endpoint) {
-    throw createHttpError(400, "请先在设置中配置默认模型 Endpoint");
+    throw createHttpError(400, "请先在设置中配置可用的 API Endpoint");
   }
 
-  const modelId = resolveGenerationModel(endpoint, getModels(endpoint.id, uid));
+  const orderedEndpointCandidates = getEndpointCandidatesForModel(
+    uid,
+    preferredModelId
+  );
+  const modelId =
+    preferredModelId ||
+    resolveGenerationModel(uid, endpoint, getModels(endpoint.id, uid));
   if (!modelId) {
-    throw createHttpError(400, "默认 Endpoint 缺少可用模型，无法生成");
+    throw createHttpError(400, "当前全局模型策略缺少可用模型，无法生成");
   }
 
-  const baseURL = normalizeBaseUrl(endpoint.base_url);
-  if (!baseURL) {
-    throw createHttpError(400, "默认 Endpoint 缺少有效的 Base URL");
+  let lastError = null;
+  for (const candidateEndpoint of orderedEndpointCandidates) {
+    const baseURL = normalizeBaseUrl(candidateEndpoint.base_url);
+    if (!baseURL) {
+      continue;
+    }
+
+    try {
+      const client = new OpenAI({
+        apiKey: candidateEndpoint.api_key,
+        baseURL,
+      });
+
+      const modelConfig =
+        findModelConfigForEndpoint(candidateEndpoint.id, uid, modelId)
+          ?.generation_config || {};
+
+      const completion = await client.chat.completions.create({
+        model: modelId,
+        ...mergeGenerationConfig(modelConfig, { temperature }),
+        messages,
+      });
+
+      if (completion.usage) {
+        logUsage({
+          uid,
+          conversationId: null,
+          model: modelId,
+          endpointName: candidateEndpoint.name,
+          promptTokens: completion.usage.prompt_tokens,
+          completionTokens: completion.usage.completion_tokens,
+          source,
+        });
+      }
+
+      return {
+        content: String(completion.choices?.[0]?.message?.content || "").trim(),
+        model: modelId,
+        endpoint: candidateEndpoint.name,
+      };
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  const client = new OpenAI({
-    apiKey: endpoint.api_key,
-    baseURL,
-  });
-
-  const completion = await client.chat.completions.create({
-    model: modelId,
-    temperature,
-    messages,
-  });
-
-  if (completion.usage) {
-    logUsage({
-      uid,
-      conversationId: null,
-      model: modelId,
-      endpointName: endpoint.name,
-      promptTokens: completion.usage.prompt_tokens,
-      completionTokens: completion.usage.completion_tokens,
-      source,
-    });
-  }
-
-  return {
-    content: String(completion.choices?.[0]?.message?.content || "").trim(),
-    model: modelId,
-    endpoint: endpoint.name,
-  };
+  throw createHttpError(
+    502,
+    lastError?.message || "当前全局模型策略对应的接入点均无法生成内容"
+  );
 }

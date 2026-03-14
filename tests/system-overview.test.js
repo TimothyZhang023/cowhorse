@@ -22,6 +22,10 @@ describe("system overview route", () => {
     expect(res.body.runtime.node).toContain("v");
     expect(typeof res.body.counts.skills).toBe("number");
     expect(Array.isArray(res.body.recommendations)).toBe(true);
+    expect(Array.isArray(res.body.health?.commands)).toBe(true);
+    expect(
+      res.body.health.commands.some((item) => ["python", "python3"].includes(item.name))
+    ).toBe(true);
   });
 
   it("clears stored history from the new system endpoint", async () => {

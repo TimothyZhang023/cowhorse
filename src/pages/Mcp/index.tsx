@@ -1,9 +1,10 @@
 import { Sidebar } from "@/components/Sidebar";
 import { useShellPreferences } from "@/hooks/useShellPreferences";
 import {
+  batchDeleteMcpServers,
+  batchUpdateMcpServers,
   createMcpServer,
   deleteMcpServer,
-  generateMcpDraft,
   getDefaultMcpTemplates,
   getMcpServers,
   generateDraftFromMarketMcp,
@@ -12,7 +13,7 @@ import {
   testMcpServerConnection,
   updateMcpServer,
 } from "@/services/api";
-import { PlusOutlined, ApiOutlined, RobotOutlined } from "@ant-design/icons";
+import { PlusOutlined, ApiOutlined } from "@ant-design/icons";
 import {
   ModalForm,
   ProFormRadio,
@@ -21,15 +22,17 @@ import {
   ProFormTextArea,
   ProList,
 } from "@ant-design/pro-components";
-import { useAppStore } from "@/stores/useAppStore";
 import {
   theme as antdTheme,
   Button,
   Card,
+  Checkbox,
   ConfigProvider,
   Input,
   message,
+  Popconfirm,
   Space,
+  Switch,
   Tag,
   Form,
   Typography,
@@ -71,7 +74,6 @@ const parseOptionalJsonText = (
 };
 
 export default () => {
-  const { currentUser, isLoggedIn } = useAppStore();
   const [messageApi, messageContextHolder] = message.useMessage();
   const {
     moduleExpanded,
@@ -91,11 +93,11 @@ export default () => {
   const [marketServers, setMarketServers] = useState<API.MarketMcpServer[]>([]);
   const [editingServer, setEditingServer] =
     useState<Partial<API.McpServer> | null>(null);
-  const [generatorOpen, setGeneratorOpen] = useState(false);
   const [marketImportingName, setMarketImportingName] = useState<string | null>(
     null
   );
   const [testingServerId, setTestingServerId] = useState<number | null>(null);
+  const [selectedServerIds, setSelectedServerIds] = useState<number[]>([]);
 
   const loadData = async () => {
     setLoading(true);
@@ -150,6 +152,49 @@ export default () => {
       messageApi.error("状态修改失败");
     }
   };
+
+  const handleBatchToggleServers = async (checked: boolean) => {
+    if (!selectedServerIds.length) {
+      messageApi.warning("请先选择 MCP 节点");
+      return;
+    }
+
+    try {
+      const result = await batchUpdateMcpServers({
+        server_ids: selectedServerIds,
+        is_enabled: checked ? 1 : 0,
+      });
+      messageApi.success(
+        `${checked ? "批量启用" : "批量禁用"}成功，更新 ${result.updated} 个 MCP 节点`
+      );
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(error?.message || "批量更新失败");
+    }
+  };
+
+  const handleBatchDeleteServers = async () => {
+    if (!selectedServerIds.length) {
+      messageApi.warning("请先选择 MCP 节点");
+      return;
+    }
+
+    try {
+      const result = await batchDeleteMcpServers(selectedServerIds);
+      messageApi.success(`已删除 ${result.deleted} 个 MCP 节点`);
+      setSelectedServerIds([]);
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(error?.message || "批量删除失败");
+    }
+  };
+
+  useEffect(() => {
+    const currentIds = servers
+      .map((server) => Number(server.id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+    setSelectedServerIds((prev) => prev.filter((id) => currentIds.includes(id)));
+  }, [servers]);
 
   const handleImportDefaultTemplate = async (templateId: string) => {
     try {
@@ -323,19 +368,65 @@ export default () => {
                   marginBottom: 16,
                   display: "flex",
                   justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
                 }}
               >
                 <Space>
                   <ApiOutlined style={{ fontSize: 20, color: "#10b981" }} />
                   <h3 style={{ margin: 0 }}>MCP 节点</h3>
                 </Space>
-                <Space>
+                <Space wrap>
                   <Button
-                    icon={<RobotOutlined />}
-                    onClick={() => setGeneratorOpen(true)}
+                    size="small"
+                    onClick={() =>
+                      setSelectedServerIds(
+                        servers
+                          .map((server) => Number(server.id))
+                          .filter((id) => Number.isInteger(id) && id > 0)
+                      )
+                    }
                   >
-                    AI 生成
+                    全选
                   </Button>
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedServerIds([])}
+                  >
+                    清空选择
+                  </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    disabled={!selectedServerIds.length}
+                    onClick={() => handleBatchToggleServers(true)}
+                  >
+                    批量启用
+                  </Button>
+                  <Button
+                    size="small"
+                    danger
+                    ghost
+                    disabled={!selectedServerIds.length}
+                    onClick={() => handleBatchToggleServers(false)}
+                  >
+                    批量禁用
+                  </Button>
+                  <Popconfirm
+                    title="批量删除 MCP 节点"
+                    description={`确定删除已选中的 ${selectedServerIds.length} 个 MCP 节点吗？`}
+                    onConfirm={handleBatchDeleteServers}
+                    disabled={!selectedServerIds.length}
+                  >
+                    <Button
+                      size="small"
+                      danger
+                      disabled={!selectedServerIds.length}
+                    >
+                      批量删除
+                    </Button>
+                  </Popconfirm>
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
@@ -357,6 +448,16 @@ export default () => {
                     dataIndex: "name",
                     render: (text, row) => (
                       <Space>
+                        <Checkbox
+                          checked={selectedServerIds.includes(Number(row.id))}
+                          onChange={(event) =>
+                            setSelectedServerIds((prev) =>
+                              event.target.checked
+                                ? Array.from(new Set([...prev, Number(row.id)]))
+                                : prev.filter((id) => id !== Number(row.id))
+                            )
+                          }
+                        />
                         <b>{text}</b>
                         <Tag color={row.type === "stdio" ? "blue" : "purple"}>
                           {row.type}
@@ -389,14 +490,14 @@ export default () => {
                       >
                         {testingServerId === row.id ? "测试中..." : "测试连接"}
                       </a>,
-                      <a
+                      <Switch
                         key="toggle"
-                        onClick={() =>
-                          handleToggleEnable(row, row.is_enabled === 0)
-                        }
-                      >
-                        {row.is_enabled === 1 ? "禁用" : "启用"}
-                      </a>,
+                        size="small"
+                        checked={row.is_enabled === 1}
+                        checkedChildren="启用"
+                        unCheckedChildren="禁用"
+                        onChange={(checked) => handleToggleEnable(row, checked)}
+                      />,
                       <a key="edit" onClick={() => setEditingServer(row)}>
                         编辑
                       </a>,
@@ -608,7 +709,21 @@ export default () => {
           initialValues={editingServerInitialValues}
           onFinish={async (values) => {
             try {
-              const formValues = { ...values };
+              let formValues = { ...values };
+              const rawJson = String(formValues.raw_json || "").trim();
+              if (rawJson) {
+                try {
+                  formValues = {
+                    ...formValues,
+                    ...JSON.parse(rawJson),
+                  };
+                } catch {
+                  messageApi.error("JSON 直填配置格式不正确");
+                  return false;
+                }
+              }
+
+              delete formValues.raw_json;
               if (
                 formValues.type === "stdio" &&
                 typeof formValues.args === "string"
@@ -662,6 +777,15 @@ export default () => {
             label="名称"
             placeholder="如：Postgres Database"
             rules={[{ required: true }]}
+          />
+          <ProFormTextArea
+            name="raw_json"
+            label="JSON 直填配置"
+            placeholder='{"name":"GitHub","type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_TOKEN":"YOUR_TOKEN"},"is_enabled":1}'
+            fieldProps={{
+              rows: 6,
+            }}
+            extra="支持直接粘贴完整 MCP JSON。若与下面 GUI 字段重复，JSON 同名字段优先生效。"
           />
           <ProFormRadio.Group
             name="type"
@@ -745,65 +869,6 @@ export default () => {
           />
         </ModalForm>
 
-        <ModalForm
-          title="AI 生成 MCP 接入"
-          open={generatorOpen}
-          onOpenChange={setGeneratorOpen}
-          modalProps={{ destroyOnHidden: true }}
-          initialValues={{ auto_create: false }}
-          onFinish={async (values) => {
-            try {
-              const result = await generateMcpDraft({
-                requirement: String(values.requirement || "").trim(),
-                auto_create: Boolean(values.auto_create),
-              });
-
-              if (result.server) {
-                messageApi.success(
-                  `已使用 ${result.model || "默认模型"} 自动接入 MCP`
-                );
-                loadData();
-                setGeneratorOpen(false);
-                return true;
-              }
-
-              setEditingServer({
-                ...result.draft,
-                is_enabled:
-                  typeof result.draft?.is_enabled === "number"
-                    ? result.draft.is_enabled
-                    : 1,
-              });
-              messageApi.success(
-                `已生成 MCP 草稿，来自 ${result.endpoint || "默认 Endpoint"}`
-              );
-              setGeneratorOpen(false);
-              return true;
-            } catch (error: any) {
-              messageApi.error(
-                error?.response?.data?.error ||
-                  error?.data?.error ||
-                  error?.message ||
-                  "MCP 生成失败"
-              );
-              return false;
-            }
-          }}
-        >
-          <ProFormTextArea
-            name="requirement"
-            label="自然语言接入需求"
-            placeholder="例如：帮我接入 GitHub MCP，本地用 npx 启动，包名是 @modelcontextprotocol/server-github，需要 Bearer Token。"
-            rules={[{ required: true, message: "请输入 MCP 接入描述" }]}
-            fieldProps={{ rows: 6 }}
-          />
-          <ProFormSwitch
-            name="auto_create"
-            label="生成后直接接入"
-            checkedChildren="直接接入"
-            unCheckedChildren="仅生成草稿"
-          />
-        </ModalForm>
       </div>
     </ConfigProvider>
   );

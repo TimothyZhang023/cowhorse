@@ -34,10 +34,18 @@ export async function getConversations() {
   });
 }
 
-export async function createConversation(title: string) {
+export async function createConversation(
+  title: string,
+  options?: { context_window?: number | null }
+) {
   return request<API.Conversation>("/api/conversations", {
     method: "POST",
-    data: { title },
+    data: {
+      title,
+      ...(options?.context_window !== undefined && {
+        context_window: options.context_window,
+      }),
+    },
   });
 }
 
@@ -51,7 +59,8 @@ export async function updateConversation(
   id: string,
   title?: string,
   systemPrompt?: string,
-  toolNames?: string[] | null
+  toolNames?: string[] | null,
+  contextWindow?: number | null
 ) {
   return request(`/api/conversations/${id}`, {
     method: "PUT",
@@ -59,11 +68,12 @@ export async function updateConversation(
       ...(title !== undefined && { title }),
       ...(systemPrompt !== undefined && { system_prompt: systemPrompt }),
       ...(toolNames !== undefined && { tool_names: toolNames }),
+      ...(contextWindow !== undefined && { context_window: contextWindow }),
     },
   });
 }
 
-export async function regenerateMessage(conversationId: string, model: string) {
+export async function regenerateMessage(conversationId: string, model?: string) {
   return request(`/api/conversations/${conversationId}/regenerate`, {
     method: "POST",
     data: { model },
@@ -74,7 +84,7 @@ export async function editMessage(
   conversationId: string,
   msgId: number,
   content: string,
-  model: string
+  model?: string
 ) {
   return request(`/api/conversations/${conversationId}/messages/${msgId}`, {
     method: "PUT",
@@ -173,9 +183,29 @@ export async function updateMcpServer(id: number, data: any) {
   });
 }
 
+export async function batchUpdateMcpServers(data: {
+  server_ids: number[];
+  is_enabled: 0 | 1;
+}) {
+  return request<{ success: boolean; updated: number }>(
+    "/api/mcp/batch/enabled",
+    {
+      method: "PUT",
+      data,
+    }
+  );
+}
+
 export async function deleteMcpServer(id: number) {
   return request(`/api/mcp/${id}`, {
     method: "DELETE",
+  });
+}
+
+export async function batchDeleteMcpServers(serverIds: number[]) {
+  return request<{ success: boolean; deleted: number }>("/api/mcp/batch", {
+    method: "DELETE",
+    data: { server_ids: serverIds },
   });
 }
 
@@ -240,6 +270,29 @@ export async function addModelToEndpoint(endpointId: number, data: API.Model) {
   });
 }
 
+export async function updateEndpointModel(
+  id: number,
+  data: Partial<API.Model>
+) {
+  return request(`/api/endpoints/models/${id}`, {
+    method: "PUT",
+    data,
+  });
+}
+
+export async function batchUpdateEndpointModels(
+  endpointId: number,
+  data: { model_ids: number[]; is_enabled: 0 | 1 }
+) {
+  return request<{ success: boolean; updated: number }>(
+    `/api/endpoints/${endpointId}/models/batch`,
+    {
+      method: "PUT",
+      data,
+    }
+  );
+}
+
 export async function deleteModelFromEndpoint(id: number) {
   return request(`/api/endpoints/models/${id}`, {
     method: "DELETE",
@@ -249,6 +302,19 @@ export async function deleteModelFromEndpoint(id: number) {
 export async function getAvailableModels() {
   return request<API.Model[]>("/api/endpoints/available/models", {
     method: "GET",
+  });
+}
+
+export async function getGlobalModelPolicy() {
+  return request<API.GlobalModelPolicy>("/api/endpoints/settings/model-policy", {
+    method: "GET",
+  });
+}
+
+export async function updateGlobalModelPolicy(data: API.GlobalModelPolicy) {
+  return request<API.GlobalModelPolicy>("/api/endpoints/settings/model-policy", {
+    method: "PUT",
+    data,
   });
 }
 
@@ -316,9 +382,29 @@ export async function updateSkill(id: number, data: Partial<API.Skill>) {
   });
 }
 
+export async function batchUpdateSkills(data: {
+  skill_ids: number[];
+  is_enabled: 0 | 1;
+}) {
+  return request<{ success: boolean; updated: number }>(
+    "/api/skills/batch/enabled",
+    {
+      method: "PUT",
+      data,
+    }
+  );
+}
+
 export async function deleteSkill(id: number) {
   return request(`/api/skills/${id}`, {
     method: "DELETE",
+  });
+}
+
+export async function batchDeleteSkills(skillIds: number[]) {
+  return request<{ success: boolean; deleted: number }>("/api/skills/batch", {
+    method: "DELETE",
+    data: { skill_ids: skillIds },
   });
 }
 
@@ -360,14 +446,9 @@ export async function deleteAgentTask(id: number) {
 }
 
 export async function runAgentTask(id: number, message?: string) {
-  return request<{
-    conversationId: string;
-    finalResponse: string;
-    runId: number;
-  }>(`/api/agent-tasks/${id}/run`, {
+  return request<API.TaskRunStartResult>(`/api/agent-tasks/${id}/run`, {
     method: "POST",
     data: { message },
-    timeout: 60000,
   });
 }
 

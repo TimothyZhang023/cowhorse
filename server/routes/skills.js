@@ -3,8 +3,10 @@ import { Router } from "express";
 import {
   createSkill,
   deleteSkillsBySource,
+  deleteSkills,
   deleteSkill,
   listSkills,
+  updateSkillsEnabled,
   updateSkill,
 } from "../models/database.js";
 import {
@@ -283,6 +285,27 @@ router.put("/:id", (req, res) => {
   try {
     updateSkill(req.params.id, req.uid, req.body);
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/batch/enabled", (req, res) => {
+  try {
+    const skillIds = Array.isArray(req.body?.skill_ids) ? req.body.skill_ids : [];
+    const isEnabled = Number(req.body?.is_enabled) === 1 ? 1 : 0;
+    const result = updateSkillsEnabled(req.uid, skillIds, isEnabled);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete("/batch", (req, res) => {
+  try {
+    const skillIds = Array.isArray(req.body?.skill_ids) ? req.body.skill_ids : [];
+    const result = deleteSkills(req.uid, skillIds);
+    res.json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

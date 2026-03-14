@@ -1,9 +1,9 @@
 import { Sidebar } from "@/components/Sidebar";
 import { useShellPreferences } from "@/hooks/useShellPreferences";
 import {
-  createSkill,
+  batchDeleteSkills,
+  batchUpdateSkills,
   deleteSkill,
-  generateSkillDraft,
   getMcpTools,
   getSkills,
   installSkillFromGitRepository,
@@ -12,8 +12,7 @@ import {
 } from "@/services/api";
 import {
   InboxOutlined,
-  PlusOutlined,
-  RobotOutlined,
+  LinkOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
@@ -24,22 +23,30 @@ import {
   ProFormTextArea,
   ProList,
 } from "@ant-design/pro-components";
-import { useAppStore } from "@/stores/useAppStore";
 import {
   theme as antdTheme,
   Button,
   Card,
+  Checkbox,
   ConfigProvider,
-  message,
+  Input,
+  Popconfirm,
+  Popover,
   Space,
+  Switch,
   Tag,
   Typography,
   Upload,
-  Input,
+  message,
 } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
 import { useEffect, useState } from "react";
 import "../Dashboard/index.css";
+
+const RECOMMENDED_SKILL_REPOS = [
+  "https://github.com/vercel-labs/agent-browser",
+  "https://github.com/anthropics/skills",
+];
 
 const fileToBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -53,7 +60,6 @@ const fileToBase64 = (file: File): Promise<string> =>
   });
 
 export default () => {
-  const { currentUser, isLoggedIn } = useAppStore();
   const [messageApi, messageContextHolder] = message.useMessage();
   const {
     moduleExpanded,
@@ -69,11 +75,11 @@ export default () => {
   const [editingSkill, setEditingSkill] = useState<Partial<API.Skill> | null>(
     null
   );
-  const [generatorOpen, setGeneratorOpen] = useState(false);
   const [gitRepoUrl, setGitRepoUrl] = useState("");
   const [installingGit, setInstallingGit] = useState(false);
   const [zipFileList, setZipFileList] = useState<UploadFile[]>([]);
   const [installingZip, setInstallingZip] = useState(false);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>([]);
 
   const loadData = async () => {
     setLoading(true);
@@ -93,7 +99,7 @@ export default () => {
           )
         )
       );
-    } catch (e) {
+    } catch {
       messageApi.error("加载技能失败");
     } finally {
       setLoading(false);
@@ -108,6 +114,7 @@ export default () => {
     ? {
         ...editingSkill,
         tools: Array.isArray(editingSkill.tools) ? editingSkill.tools : [],
+        is_enabled: Number(editingSkill.is_enabled) !== 0,
       }
     : {};
 
@@ -159,6 +166,59 @@ export default () => {
     }
   };
 
+  const handleToggleSkill = async (row: API.Skill, checked: boolean) => {
+    try {
+      await updateSkill(row.id, { is_enabled: checked ? 1 : 0 });
+      messageApi.success(checked ? "已启用" : "已禁用");
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(error?.message || "状态更新失败");
+    }
+  };
+
+  const handleBatchToggleSkills = async (checked: boolean) => {
+    if (!selectedSkillIds.length) {
+      messageApi.warning("请先选择 Skill");
+      return;
+    }
+
+    try {
+      const result = await batchUpdateSkills({
+        skill_ids: selectedSkillIds,
+        is_enabled: checked ? 1 : 0,
+      });
+      messageApi.success(
+        `${checked ? "批量启用" : "批量禁用"}成功，更新 ${result.updated} 个 Skill`
+      );
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(error?.message || "批量更新失败");
+    }
+  };
+
+  const handleBatchDeleteSkills = async () => {
+    if (!selectedSkillIds.length) {
+      messageApi.warning("请先选择 Skill");
+      return;
+    }
+
+    try {
+      const result = await batchDeleteSkills(selectedSkillIds);
+      messageApi.success(`已删除 ${result.deleted} 个 Skill`);
+      setSelectedSkillIds([]);
+      await loadData();
+    } catch (error: any) {
+      messageApi.error(error?.message || "批量删除失败");
+    }
+  };
+
+  useEffect(() => {
+    const currentIds = skills
+      .map((skill) => Number(skill.id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+    setSelectedSkillIds((prev) => prev.filter((id) => currentIds.includes(id)));
+  }, [skills]);
+
   return (
     <ConfigProvider
       wave={{ disabled: true }}
@@ -185,9 +245,7 @@ export default () => {
             <div>
               <div className="cw-dashboard-eyebrow">Skills</div>
               <h1>技能库</h1>
-              <p>
-                手工维护技能，或直接用自然语言生成技能草稿，再补充工具约束后保存。
-              </p>
+              <p>Skill 作为全局能力开关管理。任务运行时默认使用当前用户已启用的全部 Skill。</p>
             </div>
           </section>
 
@@ -208,10 +266,47 @@ export default () => {
                   />
                   <h3 style={{ margin: 0 }}>安装 Skill 包</h3>
                 </Space>
-                <Typography.Text type="secondary">
-                  支持 Git 仓库安装/更新，以及 ZIP 拖拽导入。后端会校验
-                  `SKILL.md` 格式，不合法会拒绝安装。
-                </Typography.Text>
+                <Space wrap>
+                  <Popover
+                    trigger="click"
+                    placement="bottomRight"
+                    content={
+                      <Space direction="vertical" size={10} style={{ maxWidth: 420 }}>
+                        <Typography.Text type="secondary">
+                          推荐直接从这些仓库安装 Skill。
+                        </Typography.Text>
+                        {RECOMMENDED_SKILL_REPOS.map((repo) => (
+                          <Card
+                            key={repo}
+                            size="small"
+                            bodyStyle={{ padding: 12 }}
+                          >
+                            <Space
+                              direction="vertical"
+                              size={8}
+                              style={{ width: "100%" }}
+                            >
+                              <Typography.Link href={repo} target="_blank">
+                                {repo}
+                              </Typography.Link>
+                              <Button
+                                size="small"
+                                onClick={() => setGitRepoUrl(repo)}
+                              >
+                                填入安装框
+                              </Button>
+                            </Space>
+                          </Card>
+                        ))}
+                      </Space>
+                    }
+                  >
+                    <Button icon={<LinkOutlined />}>推荐 Skills</Button>
+                  </Popover>
+                  <Typography.Text type="secondary">
+                    保留仓库和 ZIP 导入；不再提供 AI 生成或手动新增入口。
+                  </Typography.Text>
+                </Space>
               </div>
 
               <div
@@ -222,14 +317,9 @@ export default () => {
                 }}
               >
                 <Card size="small" title="Git 仓库">
-                  <Space
-                    direction="vertical"
-                    size={12}
-                    style={{ width: "100%" }}
-                  >
+                  <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     <Typography.Text type="secondary">
-                      输入 Skill
-                      仓库地址。再次输入同一地址时会强制拉取最新内容并覆盖同步。
+                      输入 Skill 仓库地址。再次输入同一地址时会拉取最新内容并同步。
                     </Typography.Text>
                     <Input
                       value={gitRepoUrl}
@@ -247,11 +337,7 @@ export default () => {
                 </Card>
 
                 <Card size="small" title="ZIP 包">
-                  <Space
-                    direction="vertical"
-                    size={12}
-                    style={{ width: "100%" }}
-                  >
+                  <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     <Upload.Dragger
                       accept=".zip"
                       maxCount={1}
@@ -277,7 +363,7 @@ export default () => {
                         拖拽 zip 到这里，或点击选择文件
                       </p>
                       <p className="ant-upload-hint">
-                        服务端会解压并检查是否包含合法的 `SKILL.md`
+                        服务端会检查是否包含合法的 `SKILL.md`
                       </p>
                     </Upload.Dragger>
                     <Button
@@ -299,6 +385,8 @@ export default () => {
                   marginBottom: 16,
                   display: "flex",
                   justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
                 }}
               >
                 <Space>
@@ -307,20 +395,60 @@ export default () => {
                   />
                   <h3 style={{ margin: 0 }}>我的技能</h3>
                 </Space>
-                <Space>
+                <Space wrap>
                   <Button
-                    icon={<RobotOutlined />}
-                    onClick={() => setGeneratorOpen(true)}
+                    size="small"
+                    onClick={() =>
+                      setSelectedSkillIds(
+                        skills
+                          .map((skill) => Number(skill.id))
+                          .filter((id) => Number.isInteger(id) && id > 0)
+                      )
+                    }
                   >
-                    AI 生成
+                    全选
                   </Button>
                   <Button
+                    size="small"
+                    onClick={() => setSelectedSkillIds([])}
+                  >
+                    清空选择
+                  </Button>
+                  <Button
+                    size="small"
                     type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={() => setEditingSkill({ tools: [] })}
+                    ghost
+                    disabled={!selectedSkillIds.length}
+                    onClick={() => handleBatchToggleSkills(true)}
                   >
-                    添加技能
+                    批量启用
                   </Button>
+                  <Button
+                    size="small"
+                    danger
+                    ghost
+                    disabled={!selectedSkillIds.length}
+                    onClick={() => handleBatchToggleSkills(false)}
+                  >
+                    批量禁用
+                  </Button>
+                  <Popconfirm
+                    title="批量删除 Skill"
+                    description={`确定删除已选中的 ${selectedSkillIds.length} 个 Skill 吗？`}
+                    onConfirm={handleBatchDeleteSkills}
+                    disabled={!selectedSkillIds.length}
+                  >
+                    <Button
+                      size="small"
+                      danger
+                      disabled={!selectedSkillIds.length}
+                    >
+                      批量删除
+                    </Button>
+                  </Popconfirm>
+                  <Typography.Text type="secondary">
+                    已选择 {selectedSkillIds.length} 个
+                  </Typography.Text>
                 </Space>
               </div>
 
@@ -331,7 +459,35 @@ export default () => {
                 metas={{
                   title: {
                     dataIndex: "name",
-                    render: (text) => <b>{text}</b>,
+                    render: (text, row) => (
+                      <Space wrap>
+                        <Checkbox
+                          checked={selectedSkillIds.includes(Number(row.id))}
+                          onChange={(event) =>
+                            setSelectedSkillIds((prev) =>
+                              event.target.checked
+                                ? Array.from(new Set([...prev, Number(row.id)]))
+                                : prev.filter((id) => id !== Number(row.id))
+                            )
+                          }
+                        />
+                        <b>{text}</b>
+                        {Number(row.is_enabled) === 1 ? (
+                          <Tag color="success">已启用</Tag>
+                        ) : (
+                          <Tag>已禁用</Tag>
+                        )}
+                        {row.source_type ? (
+                          <Tag
+                            color={row.source_type === "git" ? "green" : "gold"}
+                          >
+                            {row.source_type === "git" ? "Git" : "ZIP"}
+                          </Tag>
+                        ) : (
+                          <Tag>手工</Tag>
+                        )}
+                      </Space>
+                    ),
                   },
                   description: {
                     render: (_, row) => (
@@ -339,22 +495,11 @@ export default () => {
                         <Typography.Text>
                           {row.description || "-"}
                         </Typography.Text>
-                        <Space wrap>
-                          {row.source_type ? (
-                            <Tag
-                              color={
-                                row.source_type === "git" ? "green" : "gold"
-                              }
-                            >
-                              {row.source_type === "git" ? "Git" : "ZIP"}
-                            </Tag>
-                          ) : (
-                            <Tag>手工</Tag>
-                          )}
-                          {row.source_location ? (
-                            <Tag>{row.source_location}</Tag>
-                          ) : null}
-                        </Space>
+                        {row.source_location ? (
+                          <Typography.Text type="secondary">
+                            {row.source_location}
+                          </Typography.Text>
+                        ) : null}
                         {row.tools?.length ? (
                           <Space wrap>
                             {row.tools.map((tool) => (
@@ -372,6 +517,14 @@ export default () => {
                       <a key="edit" onClick={() => setEditingSkill(row)}>
                         编辑
                       </a>,
+                      <Switch
+                        key="toggle"
+                        size="small"
+                        checked={Number(row.is_enabled) === 1}
+                        checkedChildren="启用"
+                        unCheckedChildren="禁用"
+                        onChange={(checked) => handleToggleSkill(row, checked)}
+                      />,
                       <a
                         key="delete"
                         style={{ color: "red" }}
@@ -392,22 +545,23 @@ export default () => {
         </main>
 
         <ModalForm
-          title={editingSkill?.id ? "编辑技能" : "添加技能"}
+          title="编辑技能"
           open={!!editingSkill}
           onOpenChange={(visible) => !visible && setEditingSkill(null)}
           modalProps={{ destroyOnHidden: true }}
           initialValues={skillInitialValues}
           onFinish={async (values) => {
+            if (!editingSkill?.id) {
+              return false;
+            }
+
             const payload = {
               ...values,
               tools: Array.isArray(values.tools) ? values.tools : [],
+              is_enabled: values.is_enabled ? 1 : 0,
             };
 
-            if (editingSkill?.id) {
-              await updateSkill(editingSkill.id, payload);
-            } else {
-              await createSkill(payload);
-            }
+            await updateSkill(editingSkill.id, payload);
             messageApi.success("保存成功");
             loadData();
             setEditingSkill(null);
@@ -438,64 +592,10 @@ export default () => {
               value: tool,
             }))}
           />
-        </ModalForm>
-
-        <ModalForm
-          title="AI 生成技能"
-          open={generatorOpen}
-          onOpenChange={setGeneratorOpen}
-          modalProps={{ destroyOnHidden: true }}
-          initialValues={{ auto_create: false }}
-          onFinish={async (values) => {
-            try {
-              const result = await generateSkillDraft({
-                requirement: String(values.requirement || "").trim(),
-                auto_create: Boolean(values.auto_create),
-              });
-
-              if (result.skill) {
-                messageApi.success(
-                  `已使用 ${result.model || "默认模型"} 自动创建技能`
-                );
-                loadData();
-                setGeneratorOpen(false);
-                return true;
-              }
-
-              setEditingSkill({
-                ...result.draft,
-                tools: Array.isArray(result.draft?.tools)
-                  ? result.draft.tools
-                  : [],
-              });
-              messageApi.success(
-                `已生成技能草稿，来自 ${result.endpoint || "默认 Endpoint"}`
-              );
-              setGeneratorOpen(false);
-              return true;
-            } catch (error: any) {
-              messageApi.error(
-                error?.response?.data?.error ||
-                  error?.data?.error ||
-                  error?.message ||
-                  "技能生成失败"
-              );
-              return false;
-            }
-          }}
-        >
-          <ProFormTextArea
-            name="requirement"
-            label="自然语言需求"
-            placeholder="例如：帮我生成一个竞品调研技能，要先拆解目标，再做网页检索，最后输出结构化结论，并优先使用已接入的搜索工具。"
-            rules={[{ required: true, message: "请输入技能需求" }]}
-            fieldProps={{ rows: 6 }}
-          />
           <ProFormSwitch
-            name="auto_create"
-            label="生成后直接保存"
-            checkedChildren="直接创建"
-            unCheckedChildren="仅生成草稿"
+            name="is_enabled"
+            label="全局启用"
+            initialValue={true}
           />
         </ModalForm>
       </div>

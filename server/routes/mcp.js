@@ -2,8 +2,10 @@ import { Router } from "express";
 
 import {
   createMcpServer,
+  deleteMcpServers,
   deleteMcpServer,
   listMcpServers,
+  updateMcpServersEnabled,
   updateMcpServer,
 } from "../models/database.js";
 import {
@@ -310,6 +312,41 @@ router.put("/:id", (req, res) => {
     // Drop existing connection so next call reconnects with new config
     disconnectMcpServer(req.uid, Number(req.params.id)).catch(console.error);
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/batch/enabled", async (req, res) => {
+  try {
+    const serverIds = Array.isArray(req.body?.server_ids)
+      ? req.body.server_ids
+      : [];
+    const isEnabled = Number(req.body?.is_enabled) === 1 ? 1 : 0;
+    const result = updateMcpServersEnabled(req.uid, serverIds, isEnabled);
+    await Promise.all(
+      serverIds.map((serverId) =>
+        disconnectMcpServer(req.uid, Number(serverId)).catch(console.error)
+      )
+    );
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete("/batch", async (req, res) => {
+  try {
+    const serverIds = Array.isArray(req.body?.server_ids)
+      ? req.body.server_ids
+      : [];
+    const result = deleteMcpServers(req.uid, serverIds);
+    await Promise.all(
+      serverIds.map((serverId) =>
+        disconnectMcpServer(req.uid, Number(serverId)).catch(console.error)
+      )
+    );
+    res.json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

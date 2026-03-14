@@ -1,10 +1,10 @@
 [package]
 name = "app"
 version = "2.0.0"
-description = "Cowhouse desktop shell with local Node sidecar"
+description = "Workhorse desktop shell with local Node sidecar"
 authors = ["CW Contributors"]
 license = ""
-repository = "https://github.com/TimothyZhang023/cowhorse"
+repository = "https://github.com/TimothyZhang023/workhorse"
 edition = "2021"
 rust-version = "1.77.2"
 

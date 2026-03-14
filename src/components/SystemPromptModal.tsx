@@ -3,13 +3,14 @@ import {
   Button,
   Card,
   Input,
+  InputNumber,
   Modal,
   Space,
   Tag,
   Tooltip,
   Typography,
 } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -106,7 +107,8 @@ interface SystemPromptModalProps {
   onClose: () => void;
   conversationId: string | null;
   currentPrompt: string;
-  onSave: (prompt: string) => Promise<void>;
+  currentContextWindow?: number | null;
+  onSave: (prompt: string, contextWindow: number | null) => Promise<void>;
 }
 
 export const SystemPromptModal = ({
@@ -114,20 +116,25 @@ export const SystemPromptModal = ({
   onClose,
   conversationId,
   currentPrompt,
+  currentContextWindow,
   onSave,
 }: SystemPromptModalProps) => {
   const [prompt, setPrompt] = useState(currentPrompt);
+  const [contextWindow, setContextWindow] = useState<number | null>(
+    currentContextWindow ?? null
+  );
   const [saving, setSaving] = useState(false);
 
   // 同步外部 currentPrompt 变化（切换对话时）
-  useState(() => {
+  useEffect(() => {
     setPrompt(currentPrompt);
-  });
+    setContextWindow(currentContextWindow ?? null);
+  }, [currentPrompt, currentContextWindow, conversationId, open]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave(prompt);
+      await onSave(prompt, contextWindow);
       onClose();
     } finally {
       setSaving(false);
@@ -183,6 +190,31 @@ export const SystemPromptModal = ({
           }}
         >
           {prompt.length} 字符
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13 }}>
+          对话上下文窗口
+        </div>
+        <InputNumber
+          value={contextWindow ?? undefined}
+          onChange={(value) =>
+            setContextWindow(typeof value === "number" && value > 0 ? value : null)
+          }
+          min={1024}
+          step={1024}
+          style={{ width: 240 }}
+          placeholder="留空则使用模型默认值"
+        />
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 12,
+            color: "#9ca3af",
+          }}
+        >
+          这里是当前对话专属配置，不再跟全局模型设置绑定。
         </div>
       </div>
 

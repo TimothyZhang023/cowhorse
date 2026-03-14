@@ -47,11 +47,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: "Dashboard",
     },
     { key: "chat", path: "/chat", icon: <MessageOutlined />, label: "对话" },
+    { type: "divider", label: "核心配置" },
+    {
+      key: "endpoints",
+      path: "/endpoints",
+      icon: <ApiOutlined />,
+      label: "LLM 端点",
+    },
     { type: "divider", label: "Agent 助手" },
     {
       key: "mcp",
       path: "/mcp",
-      icon: <ApiOutlined />,
+      icon: <DesktopOutlined />,
       label: "MCP 管理",
     },
     {
@@ -99,7 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="cw-sider-brand-row">
           <div className="cw-sider-badge">CW</div>
           {moduleExpanded && (
-            <span className="cw-sider-brand-text">cowhouse</span>
+            <span className="cw-sider-brand-text">workhorse</span>
           )}
           <Button
             type="text"

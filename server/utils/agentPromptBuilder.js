@@ -26,6 +26,22 @@ export function buildGlobalPromptExtension(globalMarkdown) {
   ].join("\n");
 }
 
+export function buildSkillsPromptExtension(taskSkills = []) {
+  if (!Array.isArray(taskSkills) || taskSkills.length === 0) {
+    return "";
+  }
+
+  let skillsPrompt = "\n\n### Skills & Guidelines:\n";
+  taskSkills.forEach((skill) => {
+    skillsPrompt += `\n- **${skill.name}**: ${skill.prompt}`;
+    if (skill.examples && skill.examples.length > 0) {
+      skillsPrompt += `\nExamples:\n${JSON.stringify(skill.examples, null, 2)}`;
+    }
+  });
+
+  return skillsPrompt;
+}
+
 export function buildTaskSystemPrompt({
   taskSystemPrompt,
   taskSkills = [],
@@ -38,15 +54,7 @@ export function buildTaskSystemPrompt({
     systemPrompt += globalExtension;
   }
 
-  if (taskSkills.length > 0) {
-    systemPrompt += "\n\n### Skills & Guidelines:\n";
-    taskSkills.forEach((skill) => {
-      systemPrompt += `\n- **${skill.name}**: ${skill.prompt}`;
-      if (skill.examples && skill.examples.length > 0) {
-        systemPrompt += `\nExamples:\n${JSON.stringify(skill.examples, null, 2)}`;
-      }
-    });
-  }
+  systemPrompt += buildSkillsPromptExtension(taskSkills);
 
   return systemPrompt.trim();
 }

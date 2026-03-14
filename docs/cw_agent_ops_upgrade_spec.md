@@ -1,4 +1,4 @@
-# cowhouse (CW) — Agent / Cron 运行可观测性升级 Spec
+# workhorse (CW) — Agent / Cron 运行可观测性升级 Spec
 
 > 最后更新：2026-03-08 ｜ 基于浏览器验收与真实回归日志
 

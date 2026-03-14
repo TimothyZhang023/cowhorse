@@ -1,11 +1,11 @@
 /**
  * OpenAI 兼容 API 代理
  *
- * 让外部工具（Cursor / Cline / VS Code 插件 / Open WebUI）连接 cowhouse，
- * 使用 cowhouse 管理的 API Endpoint 和模型。
+ * 让外部工具（Cursor / Cline / VS Code 插件 / Open WebUI）连接 workhorse，
+ * 使用 workhorse 管理的 API Endpoint 和模型。
  *
- * 鉴权：Bearer <cowhouse API Key>（在用量统计 → API Keys 中创建）
- * Base URL: http://your-cowhouse-host:8000/v1
+ * 鉴权：Bearer <workhorse API Key>（在用量统计 → API Keys 中创建）
+ * Base URL: http://your-workhorse-host:8000/v1
  *
  * 支持接口：
  *   GET  /v1/models              - 列出可用模型
@@ -15,13 +15,16 @@
 import { Router } from "express";
 import OpenAI from "openai";
 import {
-  getDefaultEndpointGroup,
   getEndpointGroups,
-  getModels,
   logUsage,
   PRESET_MODELS,
   verifyApiKey,
 } from "../models/database.js";
+import {
+  getEnabledModelCatalog,
+  getEndpointCandidatesForModel,
+  resolveModelCandidates,
+} from "../utils/modelSelection.js";
 
 const router = Router();
 
@@ -50,7 +53,7 @@ function proxyAuth(req, res, next) {
   if (!token) {
     return res.status(401).json({
       error: {
-        message: "API Key 不能为空，请在 cowhouse 的设置 → API Keys 中创建",
+        message: "API Key 不能为空，请在 workhorse 的设置 → API Keys 中创建",
         type: "auth_error",
       },
     });
@@ -75,23 +78,13 @@ router.use(proxyAuth);
 // GET /v1/models - 列出可用模型
 router.get("/models", (req, res) => {
   try {
-    const defaultEndpoint =
-      getDefaultEndpointGroup(req.uid) ||
-      getEndpointGroups(req.uid).sort((a, b) => b.is_default - a.is_default)[0];
+    let effectiveModels = getEnabledModelCatalog(req.uid).map((model) => ({
+      model_id: model.model_id,
+      display_name: model.display_name,
+    }));
 
-    let effectiveModels = PRESET_MODELS;
-    if (defaultEndpoint) {
-      const endpointModels = getModels(defaultEndpoint.id, req.uid);
-      if (endpointModels.length > 0) {
-        effectiveModels = endpointModels.map((m) => ({
-          model_id: m.model_id,
-          display_name: m.display_name,
-        }));
-      } else if (defaultEndpoint.use_preset_models) {
-        effectiveModels = PRESET_MODELS;
-      } else {
-        effectiveModels = [];
-      }
+    if (!effectiveModels.length) {
+      effectiveModels = PRESET_MODELS;
     }
 
     const deduped = Array.from(
@@ -101,7 +94,7 @@ router.get("/models", (req, res) => {
       id: m.model_id,
       object: "model",
       created: Math.floor(Date.now() / 1000),
-      owned_by: "cowhouse",
+      owned_by: "workhorse",
     }));
     res.json({ object: "list", data: models });
   } catch (error) {
@@ -133,96 +126,102 @@ router.post("/chat/completions", async (req, res) => {
   }
 
   try {
-    // 获取所有 Endpoint，默认优先
-    const endpoints = getEndpointGroups(req.uid).sort(
-      (a, b) => b.is_default - a.is_default
-    );
-    if (!endpoints.length) {
+    const allEndpoints = getEndpointGroups(req.uid);
+    if (!allEndpoints.length) {
       return res.status(400).json({
         error: {
-          message: "请先在 cowhouse 中配置 API Endpoint",
+          message: "请先在 workhorse 中配置 API Endpoint",
+          type: "invalid_request_error",
+        },
+      });
+    }
+
+    const candidateModels = resolveModelCandidates(req.uid, String(model || ""));
+    if (!candidateModels.length) {
+      return res.status(400).json({
+        error: {
+          message: "请先在 workhorse 中启用至少一个模型",
           type: "invalid_request_error",
         },
       });
     }
 
     let lastError = null;
-    for (const ep of endpoints) {
-      try {
-        const client = new OpenAI({ apiKey: ep.api_key, baseURL: ep.base_url });
-        const resolvedMaxTokens = resolveProxyMaxTokens(ep, max_tokens);
+    for (const candidateModel of candidateModels) {
+      const endpoints = getEndpointCandidatesForModel(req.uid, candidateModel);
+      for (const ep of endpoints) {
+        try {
+          const client = new OpenAI({ apiKey: ep.api_key, baseURL: ep.base_url });
+          const resolvedMaxTokens = resolveProxyMaxTokens(ep, max_tokens);
 
-        const params = {
-          model: model || "gpt-4",
-          messages,
-          stream,
-          ...(temperature !== undefined && { temperature }),
-          ...(resolvedMaxTokens !== undefined && {
-            max_tokens: resolvedMaxTokens,
-          }),
-          ...(top_p !== undefined && { top_p }),
-          ...(frequency_penalty !== undefined && { frequency_penalty }),
-          ...(presence_penalty !== undefined && { presence_penalty }),
-          ...(stop !== undefined && { stop }),
-        };
+          const params = {
+            model: candidateModel,
+            messages,
+            stream,
+            ...(temperature !== undefined && { temperature }),
+            ...(resolvedMaxTokens !== undefined && {
+              max_tokens: resolvedMaxTokens,
+            }),
+            ...(top_p !== undefined && { top_p }),
+            ...(frequency_penalty !== undefined && { frequency_penalty }),
+            ...(presence_penalty !== undefined && { presence_penalty }),
+            ...(stop !== undefined && { stop }),
+          };
 
-        if (stream) {
-          // 流式：直接透传 SSE
-          res.setHeader("Content-Type", "text/event-stream");
-          res.setHeader("Cache-Control", "no-cache");
-          res.setHeader("Transfer-Encoding", "chunked");
-          res.setHeader("x-cw-endpoint", ep.name);
-          res.setHeader("x-timo-endpoint", ep.name);
+          if (stream) {
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Transfer-Encoding", "chunked");
+            res.setHeader("x-cw-endpoint", ep.name);
+            res.setHeader("x-timo-endpoint", ep.name);
 
-          params.stream_options = { include_usage: true };
-          const streamResp = await client.chat.completions.create(params);
-          let promptTokens = 0;
-          let completionTokens = 0;
+            params.stream_options = { include_usage: true };
+            const streamResp = await client.chat.completions.create(params);
+            let promptTokens = 0;
+            let completionTokens = 0;
 
-          for await (const chunk of streamResp) {
-            if (chunk.usage) {
-              promptTokens = chunk.usage.prompt_tokens || 0;
-              completionTokens = chunk.usage.completion_tokens || 0;
+            for await (const chunk of streamResp) {
+              if (chunk.usage) {
+                promptTokens = chunk.usage.prompt_tokens || 0;
+                completionTokens = chunk.usage.completion_tokens || 0;
+              }
+              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             }
-            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+
+            logUsage({
+              uid: req.uid,
+              model: candidateModel,
+              endpointName: ep.name,
+              promptTokens,
+              completionTokens,
+              source: "proxy",
+            });
+            return;
+          } else {
+            const completion = await client.chat.completions.create(params);
+            res.setHeader("x-cw-endpoint", ep.name);
+            res.setHeader("x-timo-endpoint", ep.name);
+            res.json(completion);
+
+            const usage = completion.usage || {};
+            logUsage({
+              uid: req.uid,
+              model: candidateModel,
+              endpointName: ep.name,
+              promptTokens: usage.prompt_tokens,
+              completionTokens: usage.completion_tokens,
+              source: "proxy",
+            });
+            return;
           }
-          res.write("data: [DONE]\n\n");
-          res.end();
-
-          // 记录用量
-          logUsage({
-            uid: req.uid,
-            model: model || "gpt-4",
-            endpointName: ep.name,
-            promptTokens,
-            completionTokens,
-            source: "proxy",
-          });
-          return;
-        } else {
-          // 非流式
-          const completion = await client.chat.completions.create(params);
-          res.setHeader("x-cw-endpoint", ep.name);
-          res.setHeader("x-timo-endpoint", ep.name);
-          res.json(completion);
-
-          // 记录用量
-          const usage = completion.usage || {};
-          logUsage({
-            uid: req.uid,
-            model: model || "gpt-4",
-            endpointName: ep.name,
-            promptTokens: usage.prompt_tokens,
-            completionTokens: usage.completion_tokens,
-            source: "proxy",
-          });
-          return;
+        } catch (error) {
+          lastError = error;
+          console.warn(
+            `[Proxy Fallback] Endpoint "${ep.name}" failed: ${error.message}`
+          );
         }
-      } catch (error) {
-        lastError = error;
-        console.warn(
-          `[Proxy Fallback] Endpoint "${ep.name}" failed: ${error.message}`
-        );
       }
     }
 

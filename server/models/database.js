@@ -1,11 +1,12 @@
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { decrypt, encrypt } from "../utils/crypto.js";
 import { createDatabaseClient } from "./dbClient.js";
 
-const dataDir = join(process.cwd(), "data");
+const dataDir = join(os.homedir(), ".workhorse");
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
@@ -30,6 +31,7 @@ db.exec(`
     uid TEXT NOT NULL,
     title TEXT NOT NULL,
     system_prompt TEXT DEFAULT '',
+    context_window INTEGER,
     tool_names TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -65,6 +67,8 @@ db.exec(`
     model_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
     is_enabled INTEGER DEFAULT 1,
+    source TEXT DEFAULT 'remote',
+    generation_config TEXT DEFAULT '{}',
     FOREIGN KEY (endpoint_group_id) REFERENCES endpoint_groups(id) ON DELETE CASCADE
   );
 
@@ -145,6 +149,7 @@ db.exec(`
     prompt TEXT NOT NULL,
     examples TEXT, -- JSON 数组: [{"thought": "...", "action": "..."}]
     tools TEXT,    -- JSON 数组 of strings (MCP tool names)
+    is_enabled INTEGER DEFAULT 1,
     source_type TEXT,
     source_location TEXT,
     source_item_path TEXT,
@@ -288,6 +293,9 @@ for (const statement of [
   "ALTER TABLE skills ADD COLUMN source_location TEXT",
   "ALTER TABLE skills ADD COLUMN source_item_path TEXT",
   "ALTER TABLE skills ADD COLUMN source_refreshed_at DATETIME",
+  "ALTER TABLE skills ADD COLUMN is_enabled INTEGER DEFAULT 1",
+  "ALTER TABLE models ADD COLUMN source TEXT DEFAULT 'remote'",
+  "ALTER TABLE models ADD COLUMN generation_config TEXT DEFAULT '{}'",
 ]) {
   try {
     db.prepare(statement).run();
@@ -432,6 +440,23 @@ export function getOrCreateLocalUser() {
 
   const created = createUser("local", crypto.randomBytes(24).toString("hex"));
   updateUserRole(created.uid, "admin");
+
+  // 初始化默认接入点
+  const endpointCount = db
+    .prepare("SELECT COUNT(*) as count FROM endpoint_groups WHERE uid = ?")
+    .get(created.uid).count;
+  if (endpointCount === 0) {
+    createEndpointGroup(
+      created.uid,
+      "OpenAI Compatible",
+      "openai_compatible",
+      "https://api.openai.com/v1",
+      "",
+      true,
+      true
+    );
+  }
+
   return { ...created, role: "admin" };
 }
 
@@ -515,6 +540,12 @@ try {
   /* column already exists */
 }
 
+try {
+  db.prepare("ALTER TABLE conversations ADD COLUMN context_window INTEGER").run();
+} catch (e) {
+  /* column already exists */
+}
+
 function parseJsonArray(rawValue, fallbackValue = []) {
   if (rawValue === undefined || rawValue === null || rawValue === "") {
     return fallbackValue;
@@ -528,11 +559,32 @@ function parseJsonArray(rawValue, fallbackValue = []) {
   }
 }
 
+function parseJsonObject(rawValue, fallbackValue = {}) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return fallbackValue;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+}
+
 function normalizeConversationRow(row) {
   if (!row) return row;
 
+  const parsedContextWindow = Number(row.context_window);
+
   return {
     ...row,
+    context_window:
+      Number.isFinite(parsedContextWindow) && parsedContextWindow > 0
+        ? Math.round(parsedContextWindow)
+        : null,
     tool_names:
       row.tool_names === null || row.tool_names === undefined
         ? null
@@ -545,6 +597,7 @@ export function getConversations(uid) {
     .prepare(
       `
     SELECT id, title, system_prompt, created_at, updated_at
+         , context_window
          , tool_names
     FROM conversations
     WHERE uid = ?
@@ -555,22 +608,29 @@ export function getConversations(uid) {
     .map(normalizeConversationRow);
 }
 
-export function createConversation(uid, title = "新对话", toolNames = null) {
+export function createConversation(uid, title = "新对话", toolNames = null, options = {}) {
+  const parsedContextWindow = Number(options?.contextWindow);
+  const contextWindow =
+    Number.isFinite(parsedContextWindow) && parsedContextWindow > 0
+      ? Math.round(parsedContextWindow)
+      : null;
   const result = db
     .prepare(
       `
-    INSERT INTO conversations (uid, title, tool_names) VALUES (?, ?, ?)
+    INSERT INTO conversations (uid, title, tool_names, context_window) VALUES (?, ?, ?, ?)
   `
     )
     .run(
       uid,
       title,
-      Array.isArray(toolNames) ? JSON.stringify(toolNames) : null
+      Array.isArray(toolNames) ? JSON.stringify(toolNames) : null,
+      contextWindow
     );
   return {
     id: result.lastInsertRowid,
     title,
     system_prompt: "",
+    context_window: contextWindow,
     tool_names: Array.isArray(toolNames) ? toolNames : null,
   };
 }
@@ -597,6 +657,20 @@ export function updateConversationToolNames(id, uid, toolNames) {
     UPDATE conversations SET tool_names = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND uid = ?
   `
   ).run(Array.isArray(toolNames) ? JSON.stringify(toolNames) : null, id, uid);
+}
+
+export function updateConversationContextWindow(id, uid, contextWindow) {
+  const parsedContextWindow = Number(contextWindow);
+  const normalizedValue =
+    Number.isFinite(parsedContextWindow) && parsedContextWindow > 0
+      ? Math.round(parsedContextWindow)
+      : null;
+
+  db.prepare(
+    `
+    UPDATE conversations SET context_window = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND uid = ?
+  `
+  ).run(normalizedValue, id, uid);
 }
 
 export function deleteConversation(id, uid) {
@@ -732,7 +806,7 @@ export function getEndpointGroups(uid) {
     SELECT id, name, provider, base_url, api_key, is_default, use_preset_models, created_at, updated_at
     FROM endpoint_groups
     WHERE uid = ?
-    ORDER BY is_default DESC, created_at ASC
+    ORDER BY created_at ASC, id ASC
   `
     )
     .all(uid)
@@ -884,48 +958,172 @@ export function getModels(endpointGroupId, uid) {
   return db
     .prepare(
       `
-    SELECT id, model_id, display_name, is_enabled
+    SELECT id, model_id, display_name, is_enabled, source, generation_config
     FROM models
     WHERE endpoint_group_id = ? AND uid = ?
   `
     )
-    .all(endpointGroupId, uid);
+    .all(endpointGroupId, uid)
+    .map((model) => ({
+      ...model,
+      source: model.source || "remote",
+      generation_config: parseJsonObject(model.generation_config, {}),
+    }));
 }
 
-export function addModel(endpointGroupId, uid, modelId, displayName) {
+export function addModel(
+  endpointGroupId,
+  uid,
+  modelId,
+  displayName,
+  options = {}
+) {
+  const {
+    is_enabled = 1,
+    source = "manual",
+    generation_config = {},
+  } = options || {};
   const result = db
     .prepare(
       `
-    INSERT INTO models (endpoint_group_id, uid, model_id, display_name) VALUES (?, ?, ?, ?)
+    INSERT INTO models (
+      endpoint_group_id,
+      uid,
+      model_id,
+      display_name,
+      is_enabled,
+      source,
+      generation_config
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `
     )
-    .run(endpointGroupId, uid, modelId, displayName);
-  return { id: result.lastInsertRowid };
+    .run(
+      endpointGroupId,
+      uid,
+      modelId,
+      displayName,
+      is_enabled ? 1 : 0,
+      source || "manual",
+      JSON.stringify(generation_config || {})
+    );
+  return {
+    id: result.lastInsertRowid,
+    model_id: modelId,
+    display_name: displayName,
+    is_enabled: is_enabled ? 1 : 0,
+    source: source || "manual",
+    generation_config: generation_config || {},
+  };
 }
 
 export function replaceModels(endpointGroupId, uid, models) {
-  const deleteStmt = db.prepare(
-    "DELETE FROM models WHERE endpoint_group_id = ? AND uid = ?"
+  const deleteRemoteStmt = db.prepare(
+    "DELETE FROM models WHERE endpoint_group_id = ? AND uid = ? AND COALESCE(source, 'remote') = 'remote'"
   );
   const insertStmt = db.prepare(
     `
-    INSERT INTO models (endpoint_group_id, uid, model_id, display_name) VALUES (?, ?, ?, ?)
+    INSERT INTO models (
+      endpoint_group_id,
+      uid,
+      model_id,
+      display_name,
+      is_enabled,
+      source,
+      generation_config
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `
   );
 
   const tx = db.transaction((items) => {
-    deleteStmt.run(endpointGroupId, uid);
+    deleteRemoteStmt.run(endpointGroupId, uid);
     for (const item of items) {
       insertStmt.run(
         endpointGroupId,
         uid,
         item.model_id,
-        item.display_name || item.model_id
+        item.display_name || item.model_id,
+        item.is_enabled ? 1 : 0,
+        item.source || "remote",
+        JSON.stringify(item.generation_config || {})
       );
     }
   });
 
   tx(models);
+}
+
+export function updateModel(id, uid, updates = {}) {
+  const current = db
+    .prepare(
+      `
+    SELECT *
+    FROM models
+    WHERE id = ? AND uid = ?
+  `
+    )
+    .get(id, uid);
+
+  if (!current) {
+    throw new Error("Model not found");
+  }
+
+  const nextModelId =
+    updates.model_id !== undefined ? updates.model_id : current.model_id;
+  const nextDisplayName =
+    updates.display_name !== undefined
+      ? updates.display_name
+      : current.display_name;
+  const nextIsEnabled =
+    updates.is_enabled !== undefined ? updates.is_enabled : current.is_enabled;
+  const nextSource =
+    updates.source !== undefined ? updates.source : current.source || "manual";
+  const nextGenerationConfig =
+    updates.generation_config !== undefined
+      ? updates.generation_config
+      : parseJsonObject(current.generation_config, {});
+
+  db.prepare(
+    `
+    UPDATE models
+    SET model_id = ?, display_name = ?, is_enabled = ?, source = ?, generation_config = ?
+    WHERE id = ? AND uid = ?
+  `
+  ).run(
+    nextModelId,
+    nextDisplayName,
+    nextIsEnabled ? 1 : 0,
+    nextSource || "manual",
+    JSON.stringify(nextGenerationConfig || {}),
+    id,
+    uid
+  );
+}
+
+export function updateModelsEnabled(endpointGroupId, uid, modelIds = [], isEnabled = 0) {
+  const normalizedIds = Array.from(
+    new Set(
+      (Array.isArray(modelIds) ? modelIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  );
+
+  if (!normalizedIds.length) {
+    return { updated: 0 };
+  }
+
+  const placeholders = normalizedIds.map(() => "?").join(",");
+  const result = db
+    .prepare(
+      `
+    UPDATE models
+    SET is_enabled = ?
+    WHERE endpoint_group_id = ? AND uid = ? AND id IN (${placeholders})
+  `
+    )
+    .run(isEnabled ? 1 : 0, endpointGroupId, uid, ...normalizedIds);
+
+  return { updated: result.changes };
 }
 
 export function deleteModel(id, uid) {
@@ -1269,6 +1467,50 @@ export function deleteMcpServer(id, uid) {
   db.prepare("DELETE FROM mcp_servers WHERE id = ? AND uid = ?").run(id, uid);
 }
 
+export function updateMcpServersEnabled(uid, serverIds = [], isEnabled = 0) {
+  const normalizedIds = Array.from(
+    new Set(
+      (Array.isArray(serverIds) ? serverIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  );
+
+  if (!normalizedIds.length) {
+    return { updated: 0 };
+  }
+
+  const placeholders = normalizedIds.map(() => "?").join(",");
+  const result = db
+    .prepare(
+      `UPDATE mcp_servers SET is_enabled = ? WHERE uid = ? AND id IN (${placeholders})`
+    )
+    .run(isEnabled ? 1 : 0, uid, ...normalizedIds);
+
+  return { updated: result.changes };
+}
+
+export function deleteMcpServers(uid, serverIds = []) {
+  const normalizedIds = Array.from(
+    new Set(
+      (Array.isArray(serverIds) ? serverIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  );
+
+  if (!normalizedIds.length) {
+    return { deleted: 0 };
+  }
+
+  const placeholders = normalizedIds.map(() => "?").join(",");
+  const result = db
+    .prepare(`DELETE FROM mcp_servers WHERE uid = ? AND id IN (${placeholders})`)
+    .run(uid, ...normalizedIds);
+
+  return { deleted: result.changes };
+}
+
 // ============ Skills 管理 ============
 
 export function listSkills(uid) {
@@ -1279,6 +1521,7 @@ export function listSkills(uid) {
       ...s,
       examples: s.examples ? JSON.parse(s.examples) : [],
       tools: s.tools ? JSON.parse(s.tools) : [],
+      is_enabled: Number(s.is_enabled) === 0 ? 0 : 1,
     }));
 }
 
@@ -1292,6 +1535,7 @@ export function createSkill(
   source = {}
 ) {
   const {
+    is_enabled = 1,
     source_type = null,
     source_location = null,
     source_item_path = null,
@@ -1307,12 +1551,13 @@ export function createSkill(
       prompt,
       examples,
       tools,
+      is_enabled,
       source_type,
       source_location,
       source_item_path,
       source_refreshed_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `
     )
     .run(
@@ -1322,6 +1567,7 @@ export function createSkill(
       prompt,
       JSON.stringify(examples),
       JSON.stringify(tools),
+      is_enabled ? 1 : 0,
       source_type,
       source_location,
       source_item_path,
@@ -1336,6 +1582,7 @@ export function createSkill(
     prompt,
     examples,
     tools,
+    is_enabled: is_enabled ? 1 : 0,
     source_type,
     source_location,
     source_item_path,
@@ -1347,7 +1594,11 @@ export function updateSkill(id, uid, updates) {
   const fields = [];
   const values = [];
   for (const [key, value] of Object.entries(updates)) {
-    if (["name", "description", "prompt", "examples", "tools"].includes(key)) {
+    if (
+      ["name", "description", "prompt", "examples", "tools", "is_enabled"].includes(
+        key
+      )
+    ) {
       fields.push(`${key} = ?`);
       values.push(typeof value === "object" ? JSON.stringify(value) : value);
     }
@@ -1363,6 +1614,50 @@ export function updateSkill(id, uid, updates) {
 
 export function deleteSkill(id, uid) {
   db.prepare("DELETE FROM skills WHERE id = ? AND uid = ?").run(id, uid);
+}
+
+export function updateSkillsEnabled(uid, skillIds = [], isEnabled = 0) {
+  const normalizedIds = Array.from(
+    new Set(
+      (Array.isArray(skillIds) ? skillIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  );
+
+  if (!normalizedIds.length) {
+    return { updated: 0 };
+  }
+
+  const placeholders = normalizedIds.map(() => "?").join(",");
+  const result = db
+    .prepare(
+      `UPDATE skills SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ? AND id IN (${placeholders})`
+    )
+    .run(isEnabled ? 1 : 0, uid, ...normalizedIds);
+
+  return { updated: result.changes };
+}
+
+export function deleteSkills(uid, skillIds = []) {
+  const normalizedIds = Array.from(
+    new Set(
+      (Array.isArray(skillIds) ? skillIds : [])
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0)
+    )
+  );
+
+  if (!normalizedIds.length) {
+    return { deleted: 0 };
+  }
+
+  const placeholders = normalizedIds.map(() => "?").join(",");
+  const result = db
+    .prepare(`DELETE FROM skills WHERE uid = ? AND id IN (${placeholders})`)
+    .run(uid, ...normalizedIds);
+
+  return { deleted: result.changes };
 }
 
 export function deleteSkillsBySource(uid, sourceType, sourceLocation) {

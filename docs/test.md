@@ -1,6 +1,6 @@
-# 🎯 Web Agent Assistant (Cowhouse) 测试规范 (Test Spec)
+# 🎯 Web Agent Assistant (Workhorse) 测试规范 (Test Spec)
 
-这份文档用于指引在使用 Cowhouse (CW) 网页端 AI 助手时，如何完整进行各项核心功能的前后端端到端测试。
+这份文档用于指引在使用 Workhorse (CW) 网页端 AI 助手时，如何完整进行各项核心功能的前后端端到端测试。
 
 ## 1. 基础配置测试 (Base Configuration)
 
@@ -87,4 +87,4 @@
 
 ---
 
-_注：该 Spec 文档将随着后续 Cowhouse 新功能迭代持续进行补充与细化。_
+_注：该 Spec 文档将随着后续 Workhorse 新功能迭代持续进行补充与细化。_

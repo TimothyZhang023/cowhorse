@@ -1,21 +1,18 @@
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
-import { ModelCompareModal } from "@/components/ModelCompareModal";
 import { Sidebar } from "@/components/Sidebar";
 import { SystemPromptModal } from "@/components/SystemPromptModal";
 import { useShellPreferences } from "@/hooks/useShellPreferences";
 import {
   createConversation,
   deleteConversation,
-  getAvailableModels,
   getConversations,
-  getEndpoints,
-  getMcpTools,
   getMessages,
   summarizeConversationTitle,
   updateConversation,
 } from "@/services/api";
 import {
   AppstoreOutlined,
+  BugOutlined,
   CheckOutlined,
   CloseOutlined,
   CopyOutlined,
@@ -26,9 +23,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
-  SlidersOutlined,
   StopOutlined,
-  ThunderboltOutlined,
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -43,9 +38,6 @@ import {
   Input,
   Layout,
   Popconfirm,
-  Popover,
-  Select,
-  Slider,
   Switch,
   Tooltip,
   Upload,
@@ -57,45 +49,6 @@ import "./index.css";
 
 const { Sider, Content } = Layout;
 const { TextArea } = Input;
-
-const STORAGE_KEYS = {
-  temperature: "cw.temperature",
-  legacyTemperature: "timo.temperature",
-  topP: "cw.top_p",
-  legacyTopP: "timo.top_p",
-  maxTokens: "cw.max_tokens",
-  legacyMaxTokens: "timo.max_tokens",
-  selectedModelPrefix: "cw.selected_model.",
-  legacySelectedModelPrefix: "timo.selected_model.",
-};
-
-const getStoredNumber = (
-  key: string,
-  fallback: number,
-  legacyKey?: string
-): number => {
-  const raw =
-    localStorage.getItem(key) ??
-    (legacyKey ? localStorage.getItem(legacyKey) : null);
-  const stored = Number(raw);
-  return Number.isFinite(stored) ? stored : fallback;
-};
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
-
-const getStoredString = (key: string, legacyKey?: string): string => {
-  return (
-    localStorage.getItem(key) ||
-    (legacyKey ? localStorage.getItem(legacyKey) || "" : "")
-  );
-};
-
-const getModelStorageKey = (endpointId: number | null) =>
-  endpointId ? `${STORAGE_KEYS.selectedModelPrefix}${endpointId}` : "";
-
-const getLegacyModelStorageKey = (endpointId: number | null) =>
-  endpointId ? `${STORAGE_KEYS.legacySelectedModelPrefix}${endpointId}` : "";
 
 // 将图片文件转为 base64
 const fileToBase64 = (file: File): Promise<string> =>
@@ -145,6 +98,13 @@ const getToolMessageStatus = (
 const STREAM_FLUSH_INTERVAL = 16;
 const STREAM_SEGMENT_DRAIN_INTERVAL = 20;
 const TITLE_REFRESH_DELAYS = [1200, 2600, 5000, 9000];
+
+type ChatDebugEvent = {
+  id: string;
+  timestamp?: string;
+  phase?: string;
+  [key: string]: any;
+};
 
 const splitIncomingStreamContent = (text: string): string[] => {
   const raw = String(text || "");
@@ -211,46 +171,12 @@ export default () => {
   const [conversations, setConversations] = useState<API.Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<API.Message[]>([]);
-  const [models, setModels] = useState<API.Model[]>([]);
-  const [mcpTools, setMcpTools] = useState<API.McpTool[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("");
-  const [defaultEndpointId, setDefaultEndpointId] = useState<number | null>(
-    null
-  );
-  const [defaultEndpointProvider, setDefaultEndpointProvider] = useState<
-    API.Endpoint["provider"] | undefined
-  >(undefined);
 
   // 输入状态
   const [inputText, setInputText] = useState("");
   const [pendingImages, setPendingImages] = useState<
     { file: File; preview: string }[]
   >([]);
-
-  // 生成参数（SOTA 级可控性）
-  const [temperature, setTemperature] = useState<number>(() =>
-    clamp(
-      getStoredNumber(
-        STORAGE_KEYS.temperature,
-        0.7,
-        STORAGE_KEYS.legacyTemperature
-      ),
-      0,
-      2
-    )
-  );
-  const [topP, setTopP] = useState<number>(() =>
-    clamp(getStoredNumber(STORAGE_KEYS.topP, 1, STORAGE_KEYS.legacyTopP), 0, 1)
-  );
-  const [maxTokens, setMaxTokens] = useState<number>(() => {
-    const stored = getStoredNumber(
-      STORAGE_KEYS.maxTokens,
-      -1,
-      STORAGE_KEYS.legacyMaxTokens
-    );
-    if (stored === -1) return -1;
-    return clamp(stored, 256, 8192);
-  });
 
   // 流式处理状态
   const [loading, setLoading] = useState(false);
@@ -262,9 +188,7 @@ export default () => {
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const currentConv = conversations.find((c) => c.id === currentConvId) ?? null;
   const currentSystemPrompt = currentConv?.system_prompt ?? "";
-
-  // 模型对比
-  const [showCompare, setShowCompare] = useState(false);
+  const currentContextWindow = currentConv?.context_window ?? null;
 
   // 对话重命名状态
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
@@ -273,10 +197,14 @@ export default () => {
   // 消息编辑状态
   const [editingMsgId, setEditingMsgId] = useState<number | null>(null);
   const [editingMsgContent, setEditingMsgContent] = useState("");
+  const [debugEnabled, setDebugEnabled] = useState(false);
+  const [debugDrawerVisible, setDebugDrawerVisible] = useState(false);
+  const [debugEventsByConversation, setDebugEventsByConversation] = useState<
+    Record<string, ChatDebugEvent[]>
+  >({});
 
   // 会话搜索状态
   const [searchQuery, setSearchQuery] = useState("");
-  const [savingConversationTools, setSavingConversationTools] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -289,6 +217,7 @@ export default () => {
   const sseRemainderRef = useRef("");
   const streamSegmentQueueRef = useRef<string[]>([]);
   const streamSegmentDrainTimerRef = useRef<number | null>(null);
+  const debugEventCounterRef = useRef(0);
 
   // 响应式监听
   useEffect(() => {
@@ -296,32 +225,6 @@ export default () => {
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
   }, []);
-
-  // 主题持久化
-  // 生成参数持久化
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.temperature, String(temperature));
-    localStorage.setItem(STORAGE_KEYS.topP, String(topP));
-    localStorage.setItem(STORAGE_KEYS.maxTokens, String(maxTokens));
-  }, [temperature, topP, maxTokens]);
-
-  useEffect(() => {
-    const storageKey = getModelStorageKey(defaultEndpointId);
-    const legacyStorageKey = getLegacyModelStorageKey(defaultEndpointId);
-    if (!storageKey) return;
-
-    if (selectedModel) {
-      localStorage.setItem(storageKey, selectedModel);
-      if (legacyStorageKey) {
-        localStorage.removeItem(legacyStorageKey);
-      }
-    } else {
-      localStorage.removeItem(storageKey);
-      if (legacyStorageKey) {
-        localStorage.removeItem(legacyStorageKey);
-      }
-    }
-  }, [defaultEndpointId, selectedModel]);
 
   useEffect(() => {
     currentConvIdRef.current = currentConvId;
@@ -372,6 +275,7 @@ export default () => {
       setCurrentConvId(null);
       setMessages([]);
       setSearchQuery("");
+      setDebugEventsByConversation({});
     };
     window.addEventListener("cw.history.cleared", handleHistoryCleared);
     return () =>
@@ -392,38 +296,9 @@ export default () => {
 
   const loadInitData = async () => {
     try {
-      const [convs, availableModels, endpoints, availableMcpTools] =
-        await Promise.all([
-          getConversations(),
-          getAvailableModels(),
-          getEndpoints(),
-          getMcpTools(),
-        ]);
-      const defaultEndpoint =
-        endpoints.find((endpoint) => !!endpoint.is_default) || null;
-      const nextDefaultEndpointId = defaultEndpoint?.id ?? null;
-      const storedModel = getStoredString(
-        getModelStorageKey(nextDefaultEndpointId),
-        getLegacyModelStorageKey(nextDefaultEndpointId)
-      );
+      const convs = await getConversations();
 
       setConversations(convs);
-      setModels(availableModels);
-      setMcpTools(Array.isArray(availableMcpTools) ? availableMcpTools : []);
-      setDefaultEndpointId(nextDefaultEndpointId);
-      setDefaultEndpointProvider(defaultEndpoint?.provider);
-      setSelectedModel((prev) => {
-        if (
-          storedModel &&
-          availableModels.some((m) => m.model_id === storedModel)
-        ) {
-          return storedModel;
-        }
-        if (prev && availableModels.some((m) => m.model_id === prev)) {
-          return prev;
-        }
-        return availableModels[0]?.model_id || "";
-      });
       if (convs.length > 0) {
         const initialConversationId =
           requestedConversationId &&
@@ -478,6 +353,25 @@ export default () => {
       streamSegmentQueueRef.current = [];
     }
   }, []);
+
+  const appendDebugEvent = useCallback(
+    (conversationId: string | null, event: Record<string, any>) => {
+      if (!conversationId) return;
+
+      setDebugEventsByConversation((prev) => {
+        const nextEvent: ChatDebugEvent = {
+          id: `${conversationId}-${debugEventCounterRef.current++}`,
+          ...event,
+        };
+        const currentEvents = prev[conversationId] || [];
+        return {
+          ...prev,
+          [conversationId]: [...currentEvents, nextEvent].slice(-500),
+        };
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     if (loading || !shouldRefocusInputRef.current) return;
@@ -726,123 +620,31 @@ export default () => {
     setEditingTitleId(null);
   };
 
-  const handleSaveSystemPrompt = async (prompt: string) => {
+  const handleSaveSystemPrompt = async (
+    prompt: string,
+    contextWindow: number | null
+  ) => {
     if (!currentConvId) return;
     try {
-      await updateConversation(currentConvId, undefined as any, prompt);
+      await updateConversation(
+        currentConvId,
+        undefined as any,
+        prompt,
+        undefined,
+        contextWindow
+      );
       setConversations((prev) =>
         prev.map((c) =>
-          c.id === currentConvId ? { ...c, system_prompt: prompt } : c
+          c.id === currentConvId
+            ? { ...c, system_prompt: prompt, context_window: contextWindow }
+            : c
         )
       );
-      messageApi.success("System Prompt 已保存");
+      messageApi.success("对话设置已保存");
     } catch (e) {
       messageApi.error("保存失败");
     }
   };
-
-  const availableToolMap = new Map<string, API.McpTool>();
-  (Array.isArray(mcpTools) ? mcpTools : []).forEach((tool) => {
-    const toolName = String(tool?.function?.name || "").trim();
-    if (toolName && !availableToolMap.has(toolName)) {
-      availableToolMap.set(toolName, tool);
-    }
-  });
-
-  const availableToolNames = Array.from(availableToolMap.keys()).sort((a, b) =>
-    a.localeCompare(b, "zh-CN")
-  );
-
-  const conversationUsesAllTools = currentConv?.tool_names == null;
-  const selectedConversationToolNames = Array.isArray(currentConv?.tool_names)
-    ? currentConv.tool_names.filter((toolName) =>
-        availableToolMap.has(toolName)
-      )
-    : [];
-
-  const toolSelectOptions = availableToolNames.map((toolName) => {
-    const tool = availableToolMap.get(toolName);
-    return {
-      value: toolName,
-      searchText: `${toolName} ${
-        tool?.function?.description || ""
-      }`.toLowerCase(),
-      label: (
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span>{toolName}</span>
-          {tool?.function?.description ? (
-            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
-              {tool.function.description}
-            </span>
-          ) : null}
-        </div>
-      ),
-    };
-  });
-
-  const conversationToolButtonText = !currentConv
-    ? "工具"
-    : conversationUsesAllTools
-    ? availableToolNames.length > 0
-      ? `全部工具 (${availableToolNames.length})`
-      : "工具"
-    : selectedConversationToolNames.length > 0
-    ? `已选工具 (${selectedConversationToolNames.length})`
-    : "工具已关闭";
-
-  const persistConversationTools = async (toolNames: string[] | null) => {
-    if (!currentConvId) return;
-
-    try {
-      setSavingConversationTools(true);
-      await updateConversation(currentConvId, undefined, undefined, toolNames);
-      setConversations((prev) =>
-        prev.map((conversation) =>
-          String(conversation.id) === String(currentConvId)
-            ? { ...conversation, tool_names: toolNames }
-            : conversation
-        )
-      );
-      messageApi.success(
-        toolNames === null
-          ? "当前会话已恢复为全部已启用工具"
-          : toolNames.length > 0
-          ? `当前会话已限制为 ${toolNames.length} 个工具`
-          : "当前会话已禁用所有工具"
-      );
-    } catch (error) {
-      console.error(error);
-      messageApi.error("保存会话工具设置失败");
-    } finally {
-      setSavingConversationTools(false);
-    }
-  };
-
-  const handleConversationToolModeChange = async (checked: boolean) => {
-    if (checked) {
-      await persistConversationTools(null);
-      return;
-    }
-
-    const nextToolNames =
-      selectedConversationToolNames.length > 0
-        ? selectedConversationToolNames
-        : availableToolNames;
-    await persistConversationTools(nextToolNames);
-  };
-
-  const generationConfig: Record<string, number> = {
-    temperature: Number(clamp(temperature, 0, 2).toFixed(2)),
-    top_p: Number(clamp(topP, 0, 1).toFixed(2)),
-  };
-  if (maxTokens !== -1) {
-    generationConfig.max_tokens = clamp(Math.round(maxTokens), 256, 8192);
-  }
-
-  const autoMaxTokensLabel =
-    defaultEndpointProvider === "openrouter"
-      ? "自动（OpenRouter 默认 16384）"
-      : "自动（不传）";
 
   // 核心发送函数（兼容 send + regenerate）
   const streamChat = async (
@@ -864,7 +666,7 @@ export default () => {
           : `/api/conversations/${convId}/chat`
       );
 
-      let body: any = { model: selectedModel, ...generationConfig };
+      let body: any = {};
       if (!isRegenerate && userMsg) {
         body.message =
           userMsg.content.replace(/\[IMAGE_DATA:[^\]]+\]/g, "").trim() ||
@@ -880,6 +682,7 @@ export default () => {
             .trim();
         }
       }
+      body.debug = debugEnabled;
 
       const response = await fetch(url, {
         method: "POST",
@@ -910,6 +713,10 @@ export default () => {
         const chunk = decoder.decode(value, { stream: true });
         processSseChunk(chunk, {
           onData: (parsed) => {
+            if (parsed.type === "debug") {
+              appendDebugEvent(convId, parsed);
+              return;
+            }
             if (parsed.type === "tool_running") {
               flushStreamBuffer();
               setMessages((prev) => {
@@ -944,6 +751,10 @@ export default () => {
       }
       flushSseRemainder({
         onData: (parsed) => {
+          if (parsed.type === "debug") {
+            appendDebugEvent(convId, parsed);
+            return;
+          }
           if (parsed.type === "tool_running") {
             flushStreamBuffer();
             setMessages((prev) => {
@@ -985,6 +796,13 @@ export default () => {
       }
     } catch (error: any) {
       if (error.name !== "AbortError") {
+        if (debugEnabled) {
+          appendDebugEvent(convId, {
+            timestamp: new Date().toISOString(),
+            phase: "client_error",
+            error: error.message || "发送失败，请检查网络和 API 配置",
+          });
+        }
         if (!sawAssistantError) {
           replaceAssistantMessage(
             streamTargetIndexRef.current,
@@ -1009,10 +827,6 @@ export default () => {
 
   const sendMessage = async () => {
     if ((!inputText.trim() && pendingImages.length === 0) || loading) return;
-    if (!selectedModel) {
-      messageApi.error("请先选择模型");
-      return;
-    }
 
     let convId = currentConvId;
     const shouldSummarizeTitle = messages.length === 0;
@@ -1055,10 +869,6 @@ export default () => {
 
   const handleRegenerate = async () => {
     if (!currentConvId || loading) return;
-    if (!selectedModel) {
-      messageApi.error("请先选择模型");
-      return;
-    }
     // 删除界面上最后一条 assistant 消息
     setMessages((prev) => {
       const newMsgs = [...prev];
@@ -1075,10 +885,6 @@ export default () => {
 
   const handleSaveEdit = async (msgId: number) => {
     if (!currentConvId || loading || !editingMsgContent.trim()) return;
-    if (!selectedModel) {
-      messageApi.error("请先选择模型");
-      return;
-    }
 
     const content = editingMsgContent;
     setEditingMsgId(null);
@@ -1115,8 +921,7 @@ export default () => {
         },
         body: JSON.stringify({
           content,
-          model: selectedModel,
-          ...generationConfig,
+          debug: debugEnabled,
         }),
         signal: controller.signal,
       });
@@ -1145,6 +950,10 @@ export default () => {
         const chunk = decoder.decode(value, { stream: true });
         processSseChunk(chunk, {
           onData: (parsed) => {
+            if (parsed.type === "debug") {
+              appendDebugEvent(currentConvId, parsed);
+              return;
+            }
             if (parsed.type === "tool_running") {
               flushStreamBuffer();
               setMessages((prev) => {
@@ -1179,6 +988,10 @@ export default () => {
       }
       flushSseRemainder({
         onData: (parsed) => {
+          if (parsed.type === "debug") {
+            appendDebugEvent(currentConvId, parsed);
+            return;
+          }
           if (parsed.type === "tool_running") {
             flushStreamBuffer();
             setMessages((prev) => {
@@ -1220,6 +1033,13 @@ export default () => {
       }
     } catch (error: any) {
       if (error.name !== "AbortError") {
+        if (debugEnabled && currentConvId) {
+          appendDebugEvent(currentConvId, {
+            timestamp: new Date().toISOString(),
+            phase: "client_error",
+            error: error.message || "发送失败，请检查网络和 API 配置",
+          });
+        }
         if (!sawAssistantError) {
           replaceAssistantMessage(
             streamTargetIndexRef.current,
@@ -1291,6 +1111,9 @@ export default () => {
   const filteredConversations = conversations.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const currentDebugEvents = currentConvId
+    ? debugEventsByConversation[currentConvId] || []
+    : [];
   const visibleMessages = messages.filter(
     (msg) =>
       !(
@@ -1300,11 +1123,6 @@ export default () => {
         msg.tool_calls.length > 0
       )
   );
-  const modelOptions = models.map((model) => ({
-    label: model.model_id,
-    value: model.model_id,
-    searchText: `${model.model_id} ${model.display_name}`.toLowerCase(),
-  }));
 
   const moduleNavContent = (
     <Sidebar
@@ -1495,79 +1313,20 @@ export default () => {
                 </Tooltip>
               )}
               {currentConvId && (
-                <Popover
-                  trigger="click"
-                  placement="bottomLeft"
-                  content={
-                    <div className="conversation-tool-config">
-                      <div className="conversation-tool-config-head">
-                        <div className="conversation-tool-config-title">
-                          对话工具
-                        </div>
-                        <Switch
-                          size="small"
-                          checked={conversationUsesAllTools}
-                          checkedChildren="全部"
-                          unCheckedChildren="自定义"
-                          loading={savingConversationTools}
-                          onChange={handleConversationToolModeChange}
-                        />
-                      </div>
-                      <div className="conversation-tool-config-hint">
-                        开启“全部”时，当前会话可使用所有已启用 MCP
-                        工具；关闭后只开放下面勾选的工具。
-                      </div>
-                      <Select
-                        mode="multiple"
-                        allowClear
-                        value={selectedConversationToolNames}
-                        onChange={(values) => persistConversationTools(values)}
-                        options={toolSelectOptions}
-                        disabled={
-                          conversationUsesAllTools ||
-                          savingConversationTools ||
-                          toolSelectOptions.length === 0
-                        }
-                        placeholder={
-                          toolSelectOptions.length === 0
-                            ? "暂无可用 MCP 工具"
-                            : "选择本会话允许调用的工具"
-                        }
-                        className="conversation-tool-select"
-                        popupMatchSelectWidth={360}
-                        showSearch
-                        filterOption={(input, option) =>
-                          String(option?.searchText || "").includes(
-                            input.trim().toLowerCase()
-                          )
-                        }
-                      />
-                      {!conversationUsesAllTools &&
-                      selectedConversationToolNames.length === 0 ? (
-                        <div className="conversation-tool-config-warning">
-                          当前会话已禁用所有工具，模型将只做纯文本回答。
-                        </div>
-                      ) : null}
-                    </div>
-                  }
-                >
-                  <Tooltip title="设置当前对话可用工具">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<ToolOutlined />}
-                      loading={savingConversationTools}
-                      style={{
-                        color: !conversationUsesAllTools
-                          ? "#0f766e"
-                          : undefined,
-                        fontWeight: !conversationUsesAllTools ? 600 : undefined,
-                      }}
-                    >
-                      {conversationToolButtonText}
-                    </Button>
-                  </Tooltip>
-                </Popover>
+                <Tooltip title="查看本次对话的模型调试输出">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<BugOutlined />}
+                    onClick={() => setDebugDrawerVisible(true)}
+                    style={{
+                      color: debugEnabled ? "#ef4444" : undefined,
+                      fontWeight: debugEnabled ? 600 : undefined,
+                    }}
+                  >
+                    {debugEnabled ? "调试开启" : "开发者调试"}
+                  </Button>
+                </Tooltip>
               )}
             </div>
             <div className="header-right">
@@ -1578,19 +1337,6 @@ export default () => {
                     icon={<AppstoreOutlined />}
                     onClick={() => setConversationDrawerVisible(true)}
                   />
-                </Tooltip>
-              )}
-              {models.length >= 2 && (
-                <Tooltip title="多模型并行对比">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<ThunderboltOutlined />}
-                    onClick={() => setShowCompare(true)}
-                    style={{ color: "#f59e0b" }}
-                  >
-                    对比
-                  </Button>
                 </Tooltip>
               )}
               <span className="header-username">{currentUser?.username}</span>
@@ -1843,105 +1589,6 @@ export default () => {
                     className="chat-input chat-input-textarea"
                   />
 
-                  <div className="model-picker">
-                    <Select
-                      value={selectedModel || undefined}
-                      onChange={setSelectedModel}
-                      options={modelOptions}
-                      showSearch
-                      filterOption={(input, option) =>
-                        String(option?.searchText || "").includes(
-                          input.trim().toLowerCase()
-                        )
-                      }
-                      popupMatchSelectWidth={460}
-                      variant="borderless"
-                      className="model-select"
-                      disabled={loading}
-                      placeholder="搜索或选择模型"
-                      notFoundContent="暂无可用模型"
-                    />
-                  </div>
-
-                  <Popover
-                    trigger="click"
-                    placement="topRight"
-                    content={
-                      <div className="generation-config">
-                        <div className="generation-item">
-                          <div className="generation-label">
-                            Temperature: {temperature.toFixed(2)}
-                          </div>
-                          <Slider
-                            min={0}
-                            max={2}
-                            step={0.01}
-                            value={temperature}
-                            onChange={setTemperature}
-                          />
-                        </div>
-                        <div className="generation-item">
-                          <div className="generation-label">
-                            Top P: {topP.toFixed(2)}
-                          </div>
-                          <Slider
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            value={topP}
-                            onChange={setTopP}
-                          />
-                        </div>
-                        <div className="generation-item">
-                          <div
-                            className="generation-label"
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                            }}
-                          >
-                            <span>
-                              Max Tokens:{" "}
-                              {maxTokens === -1
-                                ? autoMaxTokensLabel
-                                : Math.round(maxTokens)}
-                            </span>
-                            <Button
-                              type="link"
-                              size="small"
-                              style={{ padding: 0, height: "auto" }}
-                              onClick={() =>
-                                setMaxTokens((prev) =>
-                                  prev === -1 ? 2048 : -1
-                                )
-                              }
-                            >
-                              {maxTokens === -1 ? "改为固定值" : "自动(-1)"}
-                            </Button>
-                          </div>
-                          <Slider
-                            min={256}
-                            max={8192}
-                            step={64}
-                            value={maxTokens === -1 ? 2048 : maxTokens}
-                            onChange={setMaxTokens}
-                            disabled={maxTokens === -1}
-                          />
-                        </div>
-                      </div>
-                    }
-                  >
-                    <Tooltip title="高级参数">
-                      <Button
-                        type="text"
-                        icon={<SlidersOutlined />}
-                        className="input-action-btn"
-                        disabled={loading}
-                      />
-                    </Tooltip>
-                  </Popover>
-
                   {loading ? (
                     <Tooltip title="停止生成">
                       <Button
@@ -1957,10 +1604,7 @@ export default () => {
                       type="primary"
                       shape="circle"
                       icon={<SendOutlined />}
-                      disabled={
-                        (!inputText.trim() && pendingImages.length === 0) ||
-                        !selectedModel
-                      }
+                      disabled={!inputText.trim() && pendingImages.length === 0}
                       onClick={sendMessage}
                       className="send-btn"
                     />
@@ -1981,15 +1625,110 @@ export default () => {
           onClose={() => setShowSystemPrompt(false)}
           conversationId={currentConvId}
           currentPrompt={currentSystemPrompt}
+          currentContextWindow={currentContextWindow}
           onSave={handleSaveSystemPrompt}
         />
-        <ModelCompareModal
-          open={showCompare}
-          onClose={() => setShowCompare(false)}
-          models={models}
-          conversationId={currentConvId}
-          isDark={isDark}
-        />
+        <Drawer
+          title="开发者调试"
+          placement="right"
+          width={520}
+          open={debugDrawerVisible}
+          onClose={() => setDebugDrawerVisible(false)}
+        >
+          <div style={{ display: "grid", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600 }}>采集模型交互流</div>
+                <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
+                  开启后会记录本页后续请求的原始调试事件、上游 chunk、工具调用和错误。
+                </div>
+              </div>
+              <Switch checked={debugEnabled} onChange={setDebugEnabled} />
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
+                当前对话已记录 {currentDebugEvents.length} 条调试事件
+              </div>
+              <Button
+                size="small"
+                onClick={() => {
+                  if (!currentConvId) return;
+                  setDebugEventsByConversation((prev) => ({
+                    ...prev,
+                    [currentConvId]: [],
+                  }));
+                }}
+                disabled={!currentConvId || currentDebugEvents.length === 0}
+              >
+                清空
+              </Button>
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              {currentDebugEvents.length === 0 ? (
+                <div style={{ color: "var(--text-tertiary)", fontSize: 13 }}>
+                  暂无调试事件。开启开关后重新发送、重试或编辑消息即可看到完整流。
+                </div>
+              ) : (
+                currentDebugEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    style={{
+                      border: "1px solid var(--border-light)",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "var(--card-bg, transparent)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        marginBottom: 8,
+                        fontSize: 12,
+                      }}
+                    >
+                      <strong>{event.phase || event.type || "debug"}</strong>
+                      <span style={{ color: "var(--text-tertiary)" }}>
+                        {event.timestamp
+                          ? new Date(event.timestamp).toLocaleTimeString()
+                          : "-"}
+                      </span>
+                    </div>
+                    <pre
+                      style={{
+                        margin: 0,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      {JSON.stringify(event, null, 2)}
+                    </pre>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </Drawer>
       </div>
     </ConfigProvider>
   );

@@ -7,7 +7,7 @@
  * - Throws on non-ok responses
  */
 
-const DEFAULT_DESKTOP_API_ORIGIN = "http://127.0.0.1:8080";
+const DEFAULT_DESKTOP_API_ORIGIN = "http://127.0.0.1:12621";
 
 interface RequestOptions extends Omit<RequestInit, "body"> {
   method?: string;

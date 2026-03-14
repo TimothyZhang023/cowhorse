@@ -21,6 +21,7 @@ declare namespace API {
     id: string;
     title: string;
     system_prompt?: string;
+    context_window?: number | null;
     tool_names?: string[] | null;
     created_at?: string;
   };
@@ -60,6 +61,25 @@ declare namespace API {
     id?: number;
     model_id: string;
     display_name: string;
+    is_enabled?: number;
+    source?: "remote" | "manual";
+    endpoint_id?: number;
+    endpoint_name?: string;
+    endpoint_provider?: string;
+    generation_config?: {
+      temperature?: number;
+      top_p?: number;
+      max_tokens?: number;
+      presence_penalty?: number;
+      frequency_penalty?: number;
+      context_window?: number;
+      [key: string]: number | undefined;
+    };
+  };
+
+  type GlobalModelPolicy = {
+    primary_model: string;
+    fallback_models: string[];
   };
 
   type McpServer = {
@@ -142,6 +162,7 @@ declare namespace API {
     prompt: string;
     examples?: any[];
     tools?: string[];
+    is_enabled?: number;
     source_type?: "git" | "zip" | null;
     source_location?: string | null;
     source_item_path?: string | null;
@@ -245,6 +266,12 @@ declare namespace API {
     content?: string;
     metadata?: Record<string, any> | null;
     created_at?: string;
+  };
+
+  type TaskRunStartResult = {
+    runId: number;
+    conversationId: string;
+    status: "running";
   };
 
   type CronJob = {

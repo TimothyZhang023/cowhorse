@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { runAgentTask } from "../models/agentEngine.js";
+import { startAgentTaskRun } from "../models/agentEngine.js";
 import {
   createAgentTask,
   createSkill,
@@ -48,25 +48,18 @@ router.get("/runs/:runId/events", (req, res) => {
 
 router.post("/", (req, res) => {
   try {
-    const {
-      name,
-      description,
-      system_prompt,
-      skill_ids,
-      tool_names,
-      model_id,
-    } = req.body;
+    const { name, description, system_prompt } = req.body;
     if (!name || !system_prompt) {
       return res.status(400).json({ error: "Missing required fields" });
     }
     const task = createAgentTask(
       req.uid,
       name,
-      description,
+      description || "",
       system_prompt,
-      skill_ids,
-      tool_names,
-      model_id
+      [],
+      [],
+      ""
     );
     res.json(task);
   } catch (error) {
@@ -100,11 +93,11 @@ router.post("/generate", async (req, res) => {
       const task = createAgentTask(
         req.uid,
         result.draft.name,
-        result.draft.description,
+        "",
         result.draft.system_prompt,
-        [...(result.draft.skill_ids || []), ...createdSkills.map((skill) => skill.id)],
-        result.draft.tool_names || [],
-        result.draft.model_id || ""
+        [],
+        [],
+        ""
       );
 
       return res.json({
@@ -142,11 +135,11 @@ router.delete("/:id", (req, res) => {
 router.post("/:id/run", async (req, res) => {
   try {
     const { message } = req.body;
-    const result = await runAgentTask(req.uid, parseInt(req.params.id), {
+    const result = await startAgentTaskRun(req.uid, parseInt(req.params.id), {
       initialUserMessage: message,
       triggerSource: "manual",
     });
-    res.json(result);
+    res.status(202).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

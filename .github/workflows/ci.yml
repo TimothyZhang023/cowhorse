@@ -30,8 +30,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Archive dist
-        run: tar -czf cowhorse-dist.tar.gz dist
+        run: tar -czf workhorse-dist.tar.gz dist
       - uses: actions/upload-artifact@v4
         with:
-          name: cowhorse-dist
-          path: cowhorse-dist.tar.gz
+          name: workhorse-dist
+          path: workhorse-dist.tar.gz

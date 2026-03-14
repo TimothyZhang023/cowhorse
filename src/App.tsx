@@ -9,6 +9,7 @@ const AgentTasks = React.lazy(() => import("./pages/AgentTasks"));
 const Mcp = React.lazy(() => import("./pages/Mcp"));
 const Skills = React.lazy(() => import("./pages/Skills"));
 const CronJobs = React.lazy(() => import("./pages/CronJobs"));
+const Endpoints = React.lazy(() => import("./pages/Endpoints"));
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
               <Route path="/mcp" element={<Mcp />} />
               <Route path="/skills" element={<Skills />} />
               <Route path="/cron-jobs" element={<CronJobs />} />
+              <Route path="/endpoints" element={<Endpoints />} />
               <Route path="*" element={<Navigate to="/chat" replace />} />
             </Routes>
           </Suspense>

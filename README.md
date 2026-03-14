@@ -1,4 +1,4 @@
-# cowhouse (CW)
+# workhorse (CW)
 
 一个本地优先的个人 AI Assistant 工作台。当前主形态已经从传统 Web 项目切到 `Vite + React + Tauri + Node sidecar`，默认面向单机桌面场景：前端是桌面壳，后端是本地 Node 服务，数据默认落在 SQLite。
 
@@ -89,7 +89,7 @@ npm run build:tauri
 
 macOS 下默认产物位置：
 
-- `src-tauri/target/release/bundle/macos/cowhouse.app`
+- `src-tauri/target/release/bundle/macos/workhorse.app`
 
 如果只想单独启动后端 sidecar：
 
@@ -142,7 +142,7 @@ npm run build:frontend
 | 变量          | 默认值         | 说明                    |
 | ------------- | -------------- | ----------------------- |
 | `DB_CLIENT`   | `sqlite`       | 支持 `sqlite` / `mysql` |
-| `DB_PATH`     | `data/chat.db` | SQLite 文件路径         |
+| `DB_PATH`     | `~/.workhorse/chat.db` | SQLite 文件路径         |
 | `DB_HOST`     | `127.0.0.1`    | MySQL 主机              |
 | `DB_PORT`     | `3306`         | MySQL 端口              |
 | `DB_USER`     | `root`         | MySQL 用户              |

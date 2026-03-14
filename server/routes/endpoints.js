@@ -6,15 +6,21 @@ import {
   createEndpointGroup,
   deleteEndpointGroup,
   deleteModel,
-  getDefaultEndpointGroup,
   getEndpointGroup,
   getEndpointGroups,
   getModels,
   PRESET_MODELS,
   replaceModels,
   setDefaultEndpointGroup,
+  updateModelsEnabled,
+  updateModel,
   updateEndpointGroup,
 } from "../models/database.js";
+import {
+  getEnabledModelCatalog,
+  getGlobalModelSettings,
+  saveGlobalModelSettings,
+} from "../utils/modelSelection.js";
 
 const router = Router();
 
@@ -176,18 +182,26 @@ router.get("/preset-models", (req, res) => {
 // 获取前端可用的模型列表 (必须放在 /:id 之前)
 router.get("/available/models", (req, res) => {
   try {
-    const defaultGroup = getDefaultEndpointGroup(req.uid);
-    if (!defaultGroup) {
-      return res.json([]);
+    const enabledModels = getEnabledModelCatalog(req.uid);
+    if (enabledModels.length > 0) {
+      return res.json(
+        enabledModels.map((model) => ({
+          id: model.id,
+          model_id: model.model_id,
+          display_name: model.display_name,
+          is_enabled: model.is_enabled,
+          endpoint_id: model.endpoint_id,
+          endpoint_name: model.endpoint_name,
+          endpoint_provider: model.endpoint_provider,
+          generation_config: model.generation_config || {},
+        }))
+      );
     }
 
-    const models = getModels(defaultGroup.id, req.uid);
-    if (models.length > 0) {
-      return res.json(models);
-    }
-
-    // 数据库没有模型时，预设模式才回退到写死列表
-    if (defaultGroup.use_preset_models) {
+    const hasPresetEnabledEndpoint = getEndpointGroups(req.uid).some(
+      (endpoint) => Number(endpoint.use_preset_models) === 1
+    );
+    if (hasPresetEnabledEndpoint) {
       return res.json(PRESET_MODELS);
     }
 
@@ -215,6 +229,32 @@ router.get("/", (req, res) => {
     res.json(safeGroups);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/settings/model-policy", (req, res) => {
+  try {
+    return res.json(getGlobalModelSettings(req.uid));
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/settings/model-policy", (req, res) => {
+  try {
+    const primaryModel = String(req.body?.primary_model || "").trim();
+    const fallbackModels = Array.isArray(req.body?.fallback_models)
+      ? req.body.fallback_models
+      : [];
+
+    return res.json(
+      saveGlobalModelSettings(req.uid, {
+        primary_model: primaryModel,
+        fallback_models: fallbackModels,
+      })
+    );
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -327,9 +367,11 @@ router.post("/:id/models/sync", async (req, res) => {
     const { models: remoteModels, baseURL } = await fetchRemoteModels(endpoint);
 
     const normalizedModels = remoteModels
-      .map((model) => ({
+      .map((model, index) => ({
         model_id: model.id,
         display_name: model.id,
+        is_enabled: index === 0 ? 1 : 0,
+        source: "remote",
       }))
       .filter((model) => !!model.model_id);
 
@@ -352,9 +394,41 @@ router.post("/:id/models/sync", async (req, res) => {
 router.post("/:id/models", (req, res) => {
   try {
     const { id } = req.params;
-    const { model_id, display_name } = req.body;
-    const model = addModel(id, req.uid, model_id, display_name);
+    const { model_id, display_name, is_enabled, generation_config } = req.body;
+    if (!String(model_id || "").trim()) {
+      return res.status(400).json({ error: "model_id is required" });
+    }
+
+    const model = addModel(id, req.uid, String(model_id).trim(), display_name || model_id, {
+      is_enabled,
+      source: "manual",
+      generation_config:
+        generation_config && typeof generation_config === "object"
+          ? generation_config
+          : {},
+    });
     res.json(model);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/models/:id", (req, res) => {
+  try {
+    updateModel(req.params.id, req.uid, req.body || {});
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/:id/models/batch", (req, res) => {
+  try {
+    const { id } = req.params;
+    const modelIds = Array.isArray(req.body?.model_ids) ? req.body.model_ids : [];
+    const isEnabled = Number(req.body?.is_enabled) === 1 ? 1 : 0;
+    const result = updateModelsEnabled(id, req.uid, modelIds, isEnabled);
+    res.json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

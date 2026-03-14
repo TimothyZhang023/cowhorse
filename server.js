@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { startServer } from "./server/app.js";
 
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 12621;
 const server = startServer(port);
 
 function shutdown() {

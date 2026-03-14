@@ -6,19 +6,32 @@ import {
   createTaskRun,
   createConversation,
   getAgentTask,
-  getEndpointGroups,
-  getModels,
   getAppSetting,
   listSkills,
   logUsage,
   updateTaskRun,
+  updateConversationContextWindow,
   updateConversationSystemPrompt,
 } from "./database.js";
 import { executeMcpTool, getAllAvailableTools } from "./mcpManager.js";
 import { buildTaskSystemPrompt } from "../utils/agentPromptBuilder.js";
+import {
+  estimateMessagesTokens,
+  estimateToolSchemaTokens,
+  resolveCompactionThresholdTokens,
+  resolveContextWindowTokens,
+  truncateTextToTokenBudget,
+} from "../utils/contextBudget.js";
+import {
+  getEndpointCandidatesForModel,
+  findModelConfigForEndpoint,
+  mergeGenerationConfig,
+  resolveEndpointModelPair,
+} from "../utils/modelSelection.js";
 
 const MAX_TURNS = 10;
 const MAX_TOOL_CALLS_PER_SIGNATURE = 2;
+const RECENT_MESSAGES_TO_KEEP = 8;
 
 function sortJsonValue(value) {
   if (Array.isArray(value)) {
@@ -183,13 +196,7 @@ export function resolveInitialUserMessage(task, initialUserMessage) {
   return `[TASK_RUN] 请开始执行任务「${task.name}」。请严格遵循 system prompt；如已配置工具，请按需调用后给出最终结论。`;
 }
 
-/**
- * Executes an AgentTask.
- * @param {string} uid - User ID
- * @param {number} taskId - ID of the AgentTask to run
- * @param {object} options - Execution options (e.g. initialUserMessage)
- */
-export async function runAgentTask(uid, taskId, options = {}) {
+function prepareTaskRunExecution(uid, taskId, options = {}) {
   const task = getAgentTask(taskId, uid);
   if (!task) throw new Error("AgentTask not found");
   const initialUserMessage = resolveInitialUserMessage(
@@ -197,7 +204,6 @@ export async function runAgentTask(uid, taskId, options = {}) {
     options.initialUserMessage
   );
 
-  // Create a dedicated conversation for this run if not provided
   let conversationId = options.conversationId;
   if (!conversationId) {
     const conv = createConversation(
@@ -230,9 +236,172 @@ export async function runAgentTask(uid, taskId, options = {}) {
     }
   );
 
+  return {
+    uid,
+    task,
+    taskId,
+    options,
+    conversationId,
+    initialUserMessage,
+    runId,
+  };
+}
+
+function formatMessageForCompaction(message) {
+  const role = String(message?.role || "unknown");
+  const name = String(message?.name || "").trim();
+  const content = String(message?.content || "").trim();
+  const prefix = name ? `${role}(${name})` : role;
+  return `${prefix}: ${content}`;
+}
+
+function buildCompactionFallbackSummary(messages = []) {
+  const lines = messages
+    .filter((message) => String(message?.content || "").trim())
+    .slice(-6)
+    .map((message) => formatMessageForCompaction(message));
+
+  if (!lines.length) {
+    return "早期上下文已压缩，但未能提取出可复用摘要。请优先依赖最近几轮消息和工具结果继续执行。";
+  }
+
+  return [
+    "已压缩的较早上下文要点：",
+    ...lines.map((line, index) => `${index + 1}. ${line}`),
+  ].join("\n");
+}
+
+async function maybeCompactTaskContext({
+  client,
+  modelId,
+  messages,
+  openaiTools,
+  contextWindow,
+  uid,
+  conversationId,
+  endpointName,
+  runId,
+  turn,
+}) {
+  const estimatedMessageTokens = estimateMessagesTokens(messages);
+  const estimatedToolTokens = estimateToolSchemaTokens(openaiTools);
+  const estimatedInputTokens = estimatedMessageTokens + estimatedToolTokens;
+  const compactThreshold = resolveCompactionThresholdTokens(contextWindow);
+
+  if (estimatedInputTokens < compactThreshold) {
+    return {
+      messages,
+      compacted: false,
+      estimated_input_tokens: estimatedInputTokens,
+      compact_threshold: compactThreshold,
+    };
+  }
+
+  const [systemMessage, ...nonSystemMessages] = messages;
+  if (nonSystemMessages.length <= RECENT_MESSAGES_TO_KEEP) {
+    return {
+      messages,
+      compacted: false,
+      estimated_input_tokens: estimatedInputTokens,
+      compact_threshold: compactThreshold,
+    };
+  }
+
+  const recentMessages = nonSystemMessages.slice(-RECENT_MESSAGES_TO_KEEP);
+  const olderMessages = nonSystemMessages.slice(0, -RECENT_MESSAGES_TO_KEEP);
+  const transcript = olderMessages.map(formatMessageForCompaction).join("\n\n");
+  const summarySource = truncateTextToTokenBudget(
+    transcript,
+    Math.max(4096, Math.floor(contextWindow * 0.2))
+  );
+
+  let summary = "";
+  try {
+    const summaryCompletion = await client.chat.completions.create({
+      model: modelId,
+      temperature: 0.2,
+      max_tokens: Math.min(2048, Math.max(512, Math.floor(contextWindow * 0.04))),
+      messages: [
+        {
+          role: "system",
+          content:
+            "你负责压缩 Agent 的历史上下文。请输出简洁中文摘要，保留用户目标、关键约束、重要事实、已完成动作、工具结果结论、未完成事项。不要编造，不要输出 XML/JSON。",
+        },
+        {
+          role: "user",
+          content: `请压缩下面的较早上下文，供任务继续执行：\n\n${summarySource}`,
+        },
+      ],
+    });
+
+    summary = String(summaryCompletion.choices?.[0]?.message?.content || "").trim();
+
+    if (summaryCompletion.usage) {
+      logUsage({
+        uid,
+        conversationId,
+        model: modelId,
+        endpointName,
+        promptTokens: summaryCompletion.usage.prompt_tokens,
+        completionTokens: summaryCompletion.usage.completion_tokens,
+        source: "agent_task_compact",
+      });
+    }
+  } catch (error) {
+    logger.warn(
+      { err: error, uid, conversationId, runId, turn, modelId },
+      "[AgentEngine] Context compaction request failed"
+    );
+  }
+
+  if (!summary) {
+    summary = buildCompactionFallbackSummary(olderMessages);
+  }
+
+  const compactedMessages = [
+    ...(systemMessage ? [systemMessage] : []),
+    {
+      role: "assistant",
+      content: `[CONTEXT_COMPACTED]\n以下为已压缩的较早上下文摘要，仅用于延续当前任务：\n${summary}`,
+    },
+    ...recentMessages,
+  ];
+
+  const compactedEstimate =
+    estimateMessagesTokens(compactedMessages) +
+    estimateToolSchemaTokens(openaiTools);
+
+  safeAddRunEvent(
+    runId,
+    uid,
+    "context_compacted",
+    "触发上下文压缩",
+    `估算输入 ${estimatedInputTokens} tokens，阈值 ${compactThreshold}，压缩后约 ${compactedEstimate} tokens`,
+    {
+      turn,
+      modelId,
+      contextWindow,
+      estimatedInputTokens,
+      compactThreshold,
+      compactedEstimate,
+    }
+  );
+
+  return {
+    messages: compactedMessages,
+    compacted: true,
+    estimated_input_tokens: compactedEstimate,
+    compact_threshold: compactThreshold,
+  };
+}
+
+async function executePreparedTaskRun(execution) {
+  const { uid, task, taskId, options, conversationId, initialUserMessage, runId } =
+    execution;
+
   // Gather Skills
   const allSkills = listSkills(uid);
-  const taskSkills = allSkills.filter((s) => task.skill_ids.includes(s.id));
+  const taskSkills = allSkills.filter((skill) => Number(skill.is_enabled) === 1);
 
   const globalPromptMarkdown = getAppSetting(
     uid,
@@ -252,16 +421,7 @@ export async function runAgentTask(uid, taskId, options = {}) {
 
   // Gather Tools
   const mcpTools = await getAllAvailableTools(uid).catch(() => []);
-  // Filter tools: include MCP tools if they match task.tool_names OR if a Skill requires them
-  const skillRequiredTools = taskSkills.flatMap((s) => s.tools || []);
-  const allowedToolNames = new Set([
-    ...(task.tool_names || []),
-    ...skillRequiredTools,
-  ]);
-
-  const requestTools = mcpTools.filter((t) =>
-    allowedToolNames.has(t.function.name)
-  );
+  const requestTools = mcpTools;
   // Strip internal _mcp_server_id for OpenAI
   const openaiTools = requestTools.map(({ _mcp_server_id, ...t }) => t);
 
@@ -270,17 +430,13 @@ export async function runAgentTask(uid, taskId, options = {}) {
   messages.push({ role: "user", content: initialUserMessage });
   addMessage(conversationId, uid, "user", initialUserMessage);
 
-  // Get Endpoints
-  const eps = getEndpointGroups(uid).sort(
-    (a, b) => b.is_default - a.is_default
-  );
-  if (eps.length === 0) throw new Error("No API endpoint configured");
-
-  const ep = eps[0]; // For background tasks, just use default for simplicity
-  const modelModels = getModels(ep.id, uid);
-  const modelId =
-    task.model_id ||
-    (modelModels.length > 0 ? modelModels[0].model_id : "gpt-4o");
+  const { endpoint: ep, modelId } = resolveEndpointModelPair(uid);
+  if (!ep) throw new Error("No API endpoint configured");
+  if (!modelId) throw new Error("No enabled model configured");
+  const modelGenerationConfig =
+    findModelConfigForEndpoint(ep.id, uid, modelId)?.generation_config || {};
+  const contextWindow = resolveContextWindowTokens(modelGenerationConfig);
+  updateConversationContextWindow(conversationId, uid, contextWindow);
 
   const baseUrl = ep.base_url.replace(/\/+$/, "");
   const client = new OpenAI({
@@ -306,14 +462,58 @@ export async function runAgentTask(uid, taskId, options = {}) {
         "turn_started",
         `第 ${turnCount} 轮`,
         `开始调用模型 ${modelId}`,
-        { turn: turnCount, modelId }
+        { turn: turnCount, modelId, endpointName: ep.name }
       );
 
-      const completion = await client.chat.completions.create({
-        model: modelId,
-        messages: messages,
-        tools: openaiTools.length > 0 ? openaiTools : undefined,
+      const compactedState = await maybeCompactTaskContext({
+        client,
+        modelId,
+        messages,
+        openaiTools,
+        contextWindow,
+        uid,
+        conversationId,
+        endpointName: ep.name,
+        runId,
+        turn: turnCount,
       });
+      if (compactedState.compacted) {
+        messages.splice(0, messages.length, ...compactedState.messages);
+      }
+
+      let completion = null;
+      let completionEndpoint = ep;
+      let lastAttemptError = null;
+
+      for (const candidateEndpoint of getEndpointCandidatesForModel(uid, modelId)) {
+        const candidateBaseUrl = candidateEndpoint.base_url.replace(/\/+$/, "");
+        const candidateClient = new OpenAI({
+          apiKey: candidateEndpoint.api_key,
+          baseURL: candidateBaseUrl.endsWith("/v1")
+            ? candidateBaseUrl
+            : `${candidateBaseUrl}/v1`,
+        });
+
+        try {
+          completion = await candidateClient.chat.completions.create({
+            model: modelId,
+            messages,
+            tools: openaiTools.length > 0 ? openaiTools : undefined,
+            ...mergeGenerationConfig(
+              findModelConfigForEndpoint(candidateEndpoint.id, uid, modelId)
+                ?.generation_config || {}
+            ),
+          });
+          completionEndpoint = candidateEndpoint;
+          break;
+        } catch (error) {
+          lastAttemptError = error;
+        }
+      }
+
+      if (!completion) {
+        throw lastAttemptError || new Error("All candidate endpoints failed");
+      }
 
       const aiMsg = completion.choices[0].message;
       messages.push(aiMsg);
@@ -323,7 +523,7 @@ export async function runAgentTask(uid, taskId, options = {}) {
         uid,
         conversationId,
         model: modelId,
-        endpointName: ep.name,
+        endpointName: completionEndpoint.name,
         promptTokens: completion.usage.prompt_tokens,
         completionTokens: completion.usage.completion_tokens,
         source: "agent_task",
@@ -560,4 +760,40 @@ export async function runAgentTask(uid, taskId, options = {}) {
     });
     throw error;
   }
+}
+
+/**
+ * Executes an AgentTask and waits for completion.
+ * @param {string} uid
+ * @param {number} taskId
+ * @param {object} options
+ */
+export async function runAgentTask(uid, taskId, options = {}) {
+  const execution = prepareTaskRunExecution(uid, taskId, options);
+  return executePreparedTaskRun(execution);
+}
+
+export async function startAgentTaskRun(uid, taskId, options = {}) {
+  const execution = prepareTaskRunExecution(uid, taskId, options);
+
+  setTimeout(() => {
+    executePreparedTaskRun(execution).catch((error) => {
+      logger.error(
+        {
+          err: error,
+          uid,
+          taskId,
+          runId: execution.runId,
+          conversationId: execution.conversationId,
+        },
+        "[AgentEngine] Background task run failed"
+      );
+    });
+  }, 0);
+
+  return {
+    runId: execution.runId,
+    conversationId: execution.conversationId,
+    status: "running",
+  };
 }
