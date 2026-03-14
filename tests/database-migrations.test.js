@@ -1,0 +1,73 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { execFileSync } from "child_process";
+import Database from "better-sqlite3";
+import { afterEach, describe, expect, it } from "vitest";
+
+const tempRoots = [];
+
+afterEach(() => {
+  while (tempRoots.length > 0) {
+    fs.rmSync(tempRoots.pop(), { recursive: true, force: true });
+  }
+  delete process.env.DB_PATH;
+});
+
+describe("database migrations", () => {
+  it("migrates legacy skills tables before creating source lookup indexes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cw-db-migrate-"));
+    const dbPath = path.join(tempRoot, "legacy.db");
+    tempRoots.push(tempRoot);
+
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE skills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        prompt TEXT NOT NULL,
+        examples TEXT,
+        tools TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    legacyDb.close();
+
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `process.env.DB_PATH = ${JSON.stringify(
+          dbPath
+        )}; await import(${JSON.stringify(
+          path.resolve("/Users/zts1993/work/work/server/models/database.js")
+        )});`,
+      ],
+      {
+        cwd: "/Users/zts1993/work/work",
+        stdio: "pipe",
+      }
+    );
+
+    const migratedDb = new Database(dbPath, { readonly: true });
+    const columns = migratedDb
+      .prepare("PRAGMA table_info(skills)")
+      .all()
+      .map((column) => column.name);
+    const indexes = migratedDb
+      .prepare("PRAGMA index_list(skills)")
+      .all()
+      .map((index) => index.name);
+    migratedDb.close();
+
+    expect(columns).toContain("source_type");
+    expect(columns).toContain("source_location");
+    expect(columns).toContain("source_item_path");
+    expect(columns).toContain("source_refreshed_at");
+    expect(indexes).toContain("idx_skills_source_lookup");
+  });
+});

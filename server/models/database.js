@@ -254,7 +254,6 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_mcp_servers_uid ON mcp_servers(uid);
   CREATE INDEX IF NOT EXISTS idx_skills_uid ON skills(uid);
-  CREATE INDEX IF NOT EXISTS idx_skills_source_lookup ON skills(uid, source_type, source_location);
   CREATE INDEX IF NOT EXISTS idx_agent_tasks_uid ON agent_tasks(uid);
   CREATE INDEX IF NOT EXISTS idx_cron_jobs_uid ON cron_jobs(uid);
   CREATE INDEX IF NOT EXISTS idx_cron_jobs_task_id ON cron_jobs(task_id);
@@ -295,6 +294,18 @@ for (const statement of [
   } catch (e) {
     /* column already exists */
   }
+}
+
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_skills_source_lookup
+    ON skills(uid, source_type, source_location)
+  `);
+} catch (e) {
+  console.error(
+    "[DB Migration] Failed to create idx_skills_source_lookup:",
+    e.message
+  );
 }
 
 // 运行时迁移：加密现有的已存储 API Keys
