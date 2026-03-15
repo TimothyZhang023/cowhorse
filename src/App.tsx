@@ -19,8 +19,30 @@ export default function App() {
         <BrowserRouter>
           <Suspense
             fallback={
-              <div className="p-8 text-center text-gray-500 mt-20">
-                加载中...
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  height: "100vh",
+                  background: "radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.05) 0%, transparent 80%)",
+                  backdropFilter: "blur(4px)",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "24px 48px",
+                    borderRadius: "16px",
+                    background: "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid rgba(255, 255, 255, 0.1)",
+                    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.1)",
+                    color: "rgba(255, 255, 255, 0.6)",
+                    fontSize: "14px",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  LOADING...
+                </div>
               </div>
             }
           >

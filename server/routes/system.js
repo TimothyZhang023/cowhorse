@@ -27,6 +27,9 @@ const NETWORK_TARGETS = [
   "https://www.alipay.com",
 ];
 
+const commandCache = new Map();
+const CACHE_TTL_MS = 1000 * 60 * 5; // 5 minutes
+
 async function withTimeout(promise, ms, fallbackValue) {
   let timer;
   try {
@@ -42,6 +45,12 @@ async function withTimeout(promise, ms, fallbackValue) {
 }
 
 async function inspectCommand(binary, args = ["--version"]) {
+  const cacheKey = `${binary}:${args.join(" ")}`;
+  const cached = commandCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
   try {
     const { stdout, stderr } = await execFileAsync(binary, args, {
       env: getShellEnv(),
@@ -49,18 +58,22 @@ async function inspectCommand(binary, args = ["--version"]) {
       maxBuffer: 1024 * 128,
     });
     const output = String(stdout || stderr || "").trim().split("\n")[0] || "ok";
-    return {
+    const data = {
       name: binary,
       installed: true,
       version: output,
     };
+    commandCache.set(cacheKey, { data, timestamp: Date.now() });
+    return data;
   } catch (error) {
-    return {
+    const data = {
       name: binary,
       installed: false,
       version: "",
       error: error.code === "ENOENT" ? "未安装" : error.message,
     };
+    commandCache.set(cacheKey, { data, timestamp: Date.now() });
+    return data;
   }
 }
 

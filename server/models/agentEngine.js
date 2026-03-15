@@ -53,7 +53,7 @@ function sortJsonValue(value) {
 
 export function getToolCallSignature(toolCall) {
   const toolName = toolCall?.function?.name || "unknown_tool";
-  const rawArgs = String(toolCall?.function?.arguments || "");
+  const rawArgs = toolCall?.function?.arguments;
 
   if (!rawArgs) {
     return `${toolName}:`;
@@ -644,7 +644,7 @@ async function executePreparedTaskRun(execution) {
               conversationId,
               uid,
               "tool",
-              `[TOOL_RESULT:${toolCall.id}:${toolCall.function.name}]:${resultStr}`
+              `[TOOL_RESULT:${toolCall.id}:${toolCall.name}]:${resultStr}`
             );
             safeAddRunEvent(
               runId,
@@ -665,7 +665,7 @@ async function executePreparedTaskRun(execution) {
               conversationId,
               uid,
               "tool",
-              `[TOOL_RESULT:${toolCall.id}:${toolCall.function.name}]:${errMsg}`
+              `[TOOL_RESULT:${toolCall.id}:${toolCall.name}]:${errMsg}`
             );
             safeAddRunEvent(
               runId,

@@ -22,6 +22,10 @@ if (!fs.existsSync(tmpDir)) {
 const dbPath = process.env.DB_PATH || join(dataDir, "chat.db");
 const db = createDatabaseClient({ dbPath });
 
+// 性能优化配置：开启 WAL 模式和 Normal 同步
+db.exec("PRAGMA journal_mode = WAL;");
+db.exec("PRAGMA synchronous = NORMAL;");
+
 // 初始化数据库表
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -109,6 +113,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
   CREATE INDEX IF NOT EXISTS idx_usage_logs_uid ON usage_logs(uid);
   CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_logs_composite_stats ON usage_logs(uid, created_at, model);
+
+  -- 核心外键与查询优化索引
+  CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_conversations_list_v2 ON conversations(uid, updated_at DESC);
 
   CREATE TABLE IF NOT EXISTS mcp_servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,6 +261,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_task_runs_cron_job_id ON task_runs(cron_job_id);
   CREATE INDEX IF NOT EXISTS idx_task_runs_started_at ON task_runs(started_at);
   CREATE INDEX IF NOT EXISTS idx_task_run_events_run_id ON task_run_events(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_run_events_timeline ON task_run_events(run_id, created_at, id);
+  CREATE INDEX IF NOT EXISTS idx_task_runs_conversation_id ON task_runs(conversation_id);
   CREATE INDEX IF NOT EXISTS idx_channels_uid ON channels(uid);
   CREATE INDEX IF NOT EXISTS idx_app_settings_uid_key ON app_settings(uid, setting_key);
 `);

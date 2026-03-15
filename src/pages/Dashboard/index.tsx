@@ -96,8 +96,8 @@ type DesktopBackendStatus = {
 type BackendServiceState = "checking" | "healthy" | "degraded" | "restarting";
 
 const HEARTBEAT_INTERVAL_MS = 15000;
-const HEARTBEAT_TIMEOUT_MS = 2500;
-const AUTO_RESTART_THRESHOLD = 2;
+const HEARTBEAT_TIMEOUT_MS = 5000;
+const AUTO_RESTART_THRESHOLD = 3;
 
 async function restartDesktopBackend() {
   const { invoke } = await import("@tauri-apps/api/core");

@@ -36,8 +36,10 @@ function loadCurrentVersion() {
 
 const currentVersion = loadCurrentVersion();
 
-const GITHUB_REPO = "TimothyZhang023/workhorse"; // Based on CorpusName from user context
+const GITHUB_REPO = "TimothyZhang023/cowhorse"; // Based on CorpusName from user context
+const STARTUP_DELAY_MS = 1000 * 15;
 const CHECK_INTERVAL_MS = 1000 * 60 * 60 * 12; // 12 hours
+const MAX_CHECK_ATTEMPTS = 3;
 
 let updateInfo = {
   hasUpdate: false,
@@ -45,8 +47,19 @@ let updateInfo = {
   releaseUrl: "",
   checkTime: null,
 };
+let checkAttempts = 0;
+let checkerStarted = false;
+
+function hasRemainingAttempts() {
+  return checkAttempts < MAX_CHECK_ATTEMPTS;
+}
 
 export async function checkUpdate() {
+  if (!hasRemainingAttempts()) {
+    return updateInfo;
+  }
+
+  checkAttempts += 1;
   try {
     const response = await fetch(
       `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
@@ -60,6 +73,9 @@ export async function checkUpdate() {
     }
 
     const data = await response.json();
+    if (!data.tag_name) {
+      throw new Error("No tag_name found in GitHub response");
+    }
     const latestVersion = data.tag_name.replace(/^v/, "");
 
     updateInfo = {
@@ -82,10 +98,12 @@ export async function checkUpdate() {
     }
   } catch (error) {
     logger.error(
-      { err: error.message },
+      { err: error.message, attempt: checkAttempts, maxAttempts: MAX_CHECK_ATTEMPTS },
       "[Update] Failed to check for updates"
     );
   }
+
+  return updateInfo;
 }
 
 function isNewerVersion(current, latest) {
@@ -103,8 +121,23 @@ export function getUpdateStatus() {
 }
 
 export function startUpdateChecker() {
-  // Initial check after 5 seconds to avoid slowing down startup
-  setTimeout(checkUpdate, 5000);
-  // Periodic check
-  setInterval(checkUpdate, CHECK_INTERVAL_MS);
+  if (checkerStarted) {
+    return;
+  }
+
+  checkerStarted = true;
+
+  // Initial check after 15 seconds to avoid slowing down startup.
+  setTimeout(() => {
+    void checkUpdate();
+  }, STARTUP_DELAY_MS);
+
+  // Periodic checks are still spaced far apart, and the process lifetime
+  // is capped to at most 3 update attempts total.
+  setInterval(() => {
+    if (!hasRemainingAttempts()) {
+      return;
+    }
+    void checkUpdate();
+  }, CHECK_INTERVAL_MS);
 }
