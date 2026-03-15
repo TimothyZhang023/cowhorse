@@ -141,6 +141,7 @@ export default () => {
   const [backendFailureCount, setBackendFailureCount] = useState(0);
   const restartInFlightRef = useRef(false);
   const failureCountRef = useRef(0);
+  const hasSeenHealthyRef = useRef(false);
 
   const loadOverview = async () => {
     setOverviewLoading(true);
@@ -170,6 +171,11 @@ export default () => {
     try {
       const data = await request<BackendHealthData>("/health", {
         timeout: HEARTBEAT_TIMEOUT_MS,
+        cache: "no-store",
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
       });
 
       if (data?.status !== "ok") {
@@ -178,6 +184,7 @@ export default () => {
 
       setBackendState("healthy");
       setBackendMessage("后端服务运行正常");
+      hasSeenHealthyRef.current = true;
       failureCountRef.current = 0;
       setBackendFailureCount(0);
       setBackendLastCheckedAt(new Date());
@@ -207,6 +214,11 @@ export default () => {
         nextFailureCount < AUTO_RESTART_THRESHOLD ||
         restartInFlightRef.current
       ) {
+        return false;
+      }
+
+      if (!forceRestart && !hasSeenHealthyRef.current) {
+        setBackendMessage("后端仍在启动中，暂不自动重启");
         return false;
       }
 

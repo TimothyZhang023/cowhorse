@@ -7,7 +7,7 @@
     "dev:facade": "vite",
     "dev:gateway": "PORT=12621 node server.js",
     "dev": "npm run stop && concurrently --kill-others --handle-input -n \"gateway,facade\" -c \"blue,green\" \"npm run dev:gateway\" \"npm run dev:facade\"",
-    "dev:tauri": "npm run stop && tauri dev",
+    "dev:tauri": "node scripts/dev-tauri.mjs",
     "tauri": "tauri",
     "stop": "node scripts/killport.mjs 12620 12621",
     "verify:lifecycle": "node scripts/verify-runtime-lifecycle.mjs",

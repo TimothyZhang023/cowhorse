@@ -8,6 +8,7 @@
  */
 
 const DEFAULT_DESKTOP_API_ORIGIN = "http://127.0.0.1:12621";
+const responseCache = new Map<string, unknown>();
 
 interface RequestOptions extends Omit<RequestInit, "body"> {
   method?: string;
@@ -108,6 +109,16 @@ export async function request<T = any>(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+  const cacheKey = `${method.toUpperCase()} ${fullUrl}`;
+  const isCacheableRequest = method.toUpperCase() === "GET" && body === undefined;
+  const readResponse = async (response: Response) => {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return (await response.json()) as T;
+    }
+    return (await response.text()) as unknown as T;
+  };
+
   try {
     const response = await fetch(fullUrl, {
       method,
@@ -117,7 +128,36 @@ export async function request<T = any>(
       ...rest,
     });
 
-    clearTimeout(timeoutId);
+    if (response.status === 304) {
+      if (isCacheableRequest && responseCache.has(cacheKey)) {
+        clearTimeout(timeoutId);
+        return responseCache.get(cacheKey) as T;
+      }
+
+      const retryResponse = await fetch(fullUrl, {
+        method,
+        headers: {
+          ...headers,
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+        body,
+        signal: controller.signal,
+        cache: "no-store",
+        ...rest,
+      });
+
+      if (!retryResponse.ok) {
+        throw new Error(`Request failed (${retryResponse.status})`);
+      }
+
+      const retryData = await readResponse(retryResponse);
+      if (isCacheableRequest) {
+        responseCache.set(cacheKey, retryData);
+      }
+      clearTimeout(timeoutId);
+      return retryData;
+    }
 
     if (!response.ok) {
       let errorMessage = `Request failed (${response.status})`;
@@ -134,13 +174,12 @@ export async function request<T = any>(
       throw new Error(errorMessage);
     }
 
-    // Handle empty responses
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("application/json")) {
-      return (await response.json()) as T;
+    const data = await readResponse(response);
+    if (isCacheableRequest) {
+      responseCache.set(cacheKey, data);
     }
-
-    return (await response.text()) as unknown as T;
+    clearTimeout(timeoutId);
+    return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
     if (error.name === "AbortError") {

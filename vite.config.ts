@@ -13,6 +13,10 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 12620,
     proxy: {
+      "/health": {
+        target: "http://127.0.0.1:12621",
+        changeOrigin: true,
+      },
       "/api": {
         target: "http://127.0.0.1:12621",
         changeOrigin: true,

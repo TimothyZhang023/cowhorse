@@ -27,6 +27,8 @@ import { authMiddleware } from "./middleware/auth.js";
 
 export function createApp() {
   const app = express();
+  // Disable etag so frontend fetch wrappers won't receive 304 (which they treat as errors).
+  app.set("etag", false);
 
   app.use(pinoHttp({ logger }));
   app.use(cors());
