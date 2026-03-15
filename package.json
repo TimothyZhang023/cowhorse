@@ -19,7 +19,7 @@
     "build:dmg": "node scripts/build-dmg.mjs",
     "build:tauri": "npm run build:sidecar && tauri build --bundles app,dmg",
     "release": "npm version patch && git push && git push --tags",
-    "build:github": "git add . && git commit -m \"v$npm_package_version\" && git push && git tag -f v$npm_package_version && git push -f origin v$npm_package_version",
+    "build:github": "git tag -f v$npm_package_version && git push -f origin v$npm_package_version",
     "start": "PORT=12621 node server.js",
     "format": "prettier --write .",
     "prepare": "husky install",
