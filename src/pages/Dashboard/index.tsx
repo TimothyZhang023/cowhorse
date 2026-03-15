@@ -88,6 +88,11 @@ type BackendHealthData = {
   status: string;
 };
 
+type DesktopBackendStatus = {
+  status: string;
+  message?: string | null;
+};
+
 type BackendServiceState = "checking" | "healthy" | "degraded" | "restarting";
 
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -97,6 +102,11 @@ const AUTO_RESTART_THRESHOLD = 2;
 async function restartDesktopBackend() {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("restart_backend");
+}
+
+async function getDesktopBackendStatus() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<DesktopBackendStatus>("get_backend_status");
 }
 
 function canRestartDesktopBackend() {
@@ -173,12 +183,23 @@ export default () => {
       setBackendLastCheckedAt(new Date());
       return true;
     } catch (error: any) {
+      let desktopBackendStatus: DesktopBackendStatus | null = null;
+      if (canRestartDesktopBackend()) {
+        try {
+          desktopBackendStatus = await getDesktopBackendStatus();
+        } catch {
+          desktopBackendStatus = null;
+        }
+      }
+
+      const fallbackMessage =
+        desktopBackendStatus?.message || error?.message || "后端服务不可达";
       const nextFailureCount = forceRestart
         ? AUTO_RESTART_THRESHOLD
         : failureCountRef.current + 1;
       failureCountRef.current = nextFailureCount;
       setBackendState("degraded");
-      setBackendMessage(error?.message || "后端服务不可达");
+      setBackendMessage(fallbackMessage);
       setBackendFailureCount(nextFailureCount);
       setBackendLastCheckedAt(new Date());
 
@@ -562,6 +583,10 @@ export default () => {
                         <div className="cw-health-ver">{backendLastCheckedAt ? backendLastCheckedAt.toLocaleTimeString() : '-'}</div>
                       </div>
                     </div>
+                  </div>
+
+                  <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--ant-color-text-description)' }}>
+                    {backendMessage}
                   </div>
                 </Card>
               </Col>

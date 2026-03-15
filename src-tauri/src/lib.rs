@@ -11,6 +11,7 @@ use std::{
   time::{Duration, Instant},
 };
 
+use serde::Serialize;
 use tauri::{AppHandle, LogicalSize, Manager, RunEvent, Size, WebviewWindow};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
@@ -18,6 +19,37 @@ use tauri_plugin_shell::{process::CommandChild, ShellExt};
 struct SidecarState {
   child: Mutex<Option<CommandChild>>,
   cleaned_up: AtomicBool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BackendRuntimeStatus {
+  status: String,
+  message: Option<String>,
+}
+
+impl Default for BackendRuntimeStatus {
+  fn default() -> Self {
+    Self {
+      status: "checking".into(),
+      message: None,
+    }
+  }
+}
+
+#[derive(Debug, Default)]
+struct BackendStatusState {
+  current: Mutex<BackendRuntimeStatus>,
+}
+
+fn update_backend_status(app: &AppHandle, status: impl Into<String>, message: Option<String>) {
+  let next = BackendRuntimeStatus {
+    status: status.into(),
+    message,
+  };
+
+  if let Ok(mut current) = app.state::<BackendStatusState>().current.lock() {
+    *current = next;
+  }
 }
 
 fn fit_main_window(window: &WebviewWindow) -> tauri::Result<()> {
@@ -166,6 +198,8 @@ fn build_backend_sidecar(
 }
 
 fn start_backend_sidecar(app: &AppHandle) -> tauri::Result<()> {
+  update_backend_status(app, "starting", Some("starting backend sidecar".into()));
+
   let workhorse_data_dir = app.path().home_dir().ok().map(|home| home.join(".workhorse"));
   if let Some(dir) = &workhorse_data_dir {
     fs::create_dir_all(dir)?;
@@ -201,9 +235,11 @@ fn start_backend_sidecar(app: &AppHandle) -> tauri::Result<()> {
     if let Some(child) = app.state::<SidecarState>().child.lock().unwrap().take() {
       let _ = child.kill();
     }
+    update_backend_status(app, "degraded", Some(error.to_string()));
     return Err(error);
   }
 
+  update_backend_status(app, "healthy", Some("backend sidecar is ready".into()));
   Ok(())
 }
 
@@ -236,11 +272,22 @@ fn restart_backend(app: AppHandle) -> Result<(), String> {
   restart_backend_sidecar(&app).map_err(|error| format!("failed to restart backend: {error}"))
 }
 
+#[tauri::command]
+fn get_backend_status(app: AppHandle) -> Result<BackendRuntimeStatus, String> {
+  app
+    .state::<BackendStatusState>()
+    .current
+    .lock()
+    .map(|state| state.clone())
+    .map_err(|error| format!("failed to read backend status: {error}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let app = tauri::Builder::default()
     .manage(SidecarState::default())
-    .invoke_handler(tauri::generate_handler![restart_backend])
+    .manage(BackendStatusState::default())
+    .invoke_handler(tauri::generate_handler![restart_backend, get_backend_status])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -251,7 +298,11 @@ pub fn run() {
       }
 
       app.handle().plugin(tauri_plugin_shell::init())?;
-      start_backend_sidecar(&app.handle())?;
+      if let Err(error) = start_backend_sidecar(&app.handle()) {
+        let message = format!("backend startup failed: {error}");
+        eprintln!("{message}");
+        update_backend_status(&app.handle(), "degraded", Some(message));
+      }
 
       if let Some(window) = app.get_webview_window("main") {
         fit_main_window(&window)?;
