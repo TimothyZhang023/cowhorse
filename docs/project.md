@@ -1,103 +1,85 @@
-# workhorse 项目说明
+# workhorse 项目设计全景
 
-> 最后更新：2026-03-14  
-> 状态：当前实现已切换为桌面优先架构
+> 最后更新：2026-03-15  
+> 状态：生产就绪 (Production Ready) - 桌面优先架构
 
-## 1. 项目定位
+## 1. 项目定位与哲学
 
-`workhorse` 是一个本地优先的个人 AI Assistant 工作台。产品目标不是做多租户 SaaS，而是把聊天、工具、技能、任务和调度统一到一台机器上的桌面应用里，强调：
+`workhorse` 旨在成为一个 **"终生学习且本地可控"** 的个人 AI 助手。它不走 SaaS 路线，而是通过 Tauri 提供的底层原生能力，让 AI 能够安全、高效地访问本地资源（文件、Shell、本地网络）。
 
-- 本地可控：默认 SQLite，本地 Node sidecar，本地账号上下文
-- 模块化扩展：MCP、Skills、Agent Tasks、Cron Jobs 可独立演进
-- 工程可维护：Node 侧集中承载模型调度、工具执行和事件落库
+- **数据主权**：数据流不出个人的电脑（除非主动调用云端模型）。
+- **能力拼装**：通过 MCP 接入专业工具，通过 Skills 定义复合能力，通过 Agent Task 编排复杂流程。
+- **长效记忆**：基于本地 SQLite 的全量审计与历史追溯。
 
-## 2. 当前技术架构
+## 2. 深度架构设计
 
-### 前端
+### 2.1 系统层次
+1. **Presentation (Tauri Shell + React)**
+   - 采用 Ant Design 5 打造专业、沉稳的 UI 指令中心。
+   - 通过 HTTP 通信与底层的 Node Sidecar 交互，未来可扩展至 IPC。
+2. **Gateway (Express)**
+   - 统一入口。负责鉴权注入（单机模式下默认赋予 `local` 用户 `admin` 权限）。
+   - 提供 OpenAI 兼容的代理层，使 Workhorse 能被其他 AI 客户端当作 Provider。
+3. **Core Engine (Agent Runtime)**
+   - **ReAct 循环**：自主识别工具调用需求并递归执行，直到产出最终结论。
+   - **Context Compactor**：当长任务接近 Token 阈值时，自动触发摘要式压缩，保留关键上下文的同时释放槽位。
+4. **Integration (MCP & Skills)**
+   - **MCP Client**：动态管理 Stdio 和 SSE 服务。
+   - **Shell Sandbox**：受限的本地命令执行环境。
 
-- Vite 5
-- React 18
-- React Router 6
-- Ant Design 5
-- 自定义请求层 `src/services/request.ts`
+### 2.2 数据模型 (Database Schema)
 
-### 桌面壳
+We use **SQLite** with **better-sqlite3** for synchronous, high-performance local storage:
 
-- Tauri 2
-- `src-tauri/src/lib.rs` 负责启动 Node sidecar
-- 生产桌面版前端通过 `http://127.0.0.1:8080` 访问本地后端
+- `users`: 虽然是单机版，仍保留 UID 体系以支持未来的账户导出与云同步。
+- `conversations`: 存储会话元数据（标题、系统提示词、绑定的工具集）。
+- `messages`: 消息流水。
+- `mcp_servers`: 存储外部 MCP 服务的启动参数与配置。
+- `skills`: 用户定义的指令库，可绑定特定的 MCP Tool 集合。
+- `agent_tasks`: 复杂场景的 Prompt 工程产物，定义了任务的系统提示词与资源范围。
+- `cron_jobs`: 定义任务的执行频率（Cron 表达式）。
+- `task_runs`: 每一次任务执行的独立审计记录。
 
-### 后端
+## 3. 核心逻辑详解
 
-- Express API
-- `better-sqlite3` 默认存储
-- 可选 MySQL
-- Pino + pino-http 日志
-- OpenAI SDK 兼容模型调用
+### 3.1 Agent 执行生命周期
+1. **初始化**：加载 Task 配置，混合全局系统提示词 (Global System Prompt)。
+2. **推理 (Reasoning)**：调用 LLM 获取思考过程或 Action 请求。
+3. **工具执行 (Tooling)**：
+   - 检查 Tool 调用预算 (Budget Check)，防止循环死锁。
+   - 路由至对应的 MCP Server 或内置工具。
+   - 捕获异常并返回给 LLM。
+4. **上下文管理**：
+   - 监控 Token 指数。
+   - 触发 `maybeCompactTaskContext` 进行动态摘要重写。
+5. **归档**：将结果持久化，并发送 Webhook 通知（如钉钉）。
 
-## 3. 运行模型
+### 3.2 安全与隐私
+- **敏感词过滤**：本地配置的敏感信息过滤。
+- **API Key 加密**：关键配置在存储前通过 `crypto` 模块进行可逆加密。
+- **本地审计**：所有 AI 的操作（尤其是 Shell 命令）均有完整的 Input/Output 记录。
 
-当前不是“浏览器登录后再进入工作台”的模型，而是“桌面应用启动后直接进入工作台”的模型：
-
-1. Tauri 启动桌面壳
-2. 桌面壳拉起 Node sidecar
-3. 后端创建或复用本地用户 `local`
-4. 前端默认进入 `/chat`
-5. 所有 `/api/*` 路由都运行在本地用户上下文下
-
-这意味着：
-
-- 登录页已经移除
-- 传统多用户 Web 部署不再是当前主路径
-- 文档、测试和路由都应该围绕 standalone desktop 设计
-
-## 4. 功能模块
-
-### 对话
-
-- 会话管理
-- 流式消息输出
-- 图片消息
-- Markdown / 代码 / 数学公式渲染
-- 消息编辑与重新生成
-- 会话级工具选择
-
-### 工具与自动化
-
-- MCP Server 管理
-- MCP Quickstart 套件
-- Skills 模板与批量导入
-- Agent Task 编排与运行记录
-- Cron Jobs 调度与执行历史
-- Channel 扩展与 DingTalk webhook
-
-### 系统能力
-
-- `GET /api/system/overview`
-- 全局 System Prompt Markdown
-- 本地历史清理接口 `DELETE /api/system/history`
-- `/v1/*` OpenAI 兼容代理
-
-## 5. 目录职责
+## 4. 目录职责分工
 
 ```text
-server/      API、模型调度、工具编排、数据库访问
-src/         桌面前端 UI
-src-tauri/   Tauri 壳、打包配置、sidecar 集成
-tests/       后端与请求层回归测试
-docs/        产品、架构与迁移文档
+server/
+  ├── app.js         # 应用初始化与中间件配置
+  ├── routes/        # 业务逻辑接口（按领域切分：conversations, mcp, tasks...）
+  ├── models/
+  │    ├── database.js     # 数据访问对象与 Schema 初始化
+  │    ├── agentEngine.js  # Agent 执行逻辑与 ReAct 循环
+  │    └── mcpManager.js   # MCP 连接池与工具分发
+  └── utils/
+       ├── contextBudget.js  # Token 计算与窗口管理
+       └── modelSelection.js # 自动根据 Endpoint 可用性寻找最佳模型
 ```
 
-## 6. 当前已知限制
+## 5. 当前限制与挑战
+- **并发性**：SQLite 在极高并发写入（如数百个 Cron Jobs 同时运行）时可能面临锁定，目前通过单机队列缓解。
+- **Sidecar 体重**：由于集成了 Node 运行时，安装包体积较传统桌面应用偏大。
+- **冷启动**：MCP Server 启动耗时依赖于具体工具（如 Docker 型工具耗时较长）。
 
-- 默认实现是单机模式，未保留完整的传统登录流
-- 打包依赖本地 sidecar 可执行文件，构建链需要和目标平台一致
-- 桌面版前端与后端默认通过本地 HTTP 通信，而不是 Tauri command IPC
-- 前端 chunk 体积偏大，`vite build` 仍有大包 warning
-
-## 7. 后续建议
-
-- 补齐 sidecar 打包与版本产物的自动化脚本
-- 把桌面构建、前端构建和 sidecar 校验接入 CI
-- 进一步拆分前端大包，降低首屏加载体积
-- 明确是否长期放弃多用户 Web 模式，避免文档和代码再次分叉
+## 6. 后续演进建议
+1. **多模态增强**：进一步优化对本地文件（PDF, CSV, Image）的深度 RAG。
+2. **分布式 MCP**：支持连接局域网内其他设备提供的 MCP 接口。
+3. **可扩展前端插件**：允许用户自定义 UI 插件来展示特定的工具运行结果（如生成图表）。
