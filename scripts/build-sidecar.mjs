@@ -125,6 +125,27 @@ async function stripBinary(binaryPath) {
   }
 }
 
+async function ensureExecutableSignature(binaryPath) {
+  if (process.platform !== "darwin" || !(await pathExists(binaryPath))) {
+    return;
+  }
+
+  const codesignCommand = await findBinary("codesign");
+  if (!codesignCommand) {
+    return;
+  }
+
+  try {
+    await runCommand(codesignCommand, ["--verify", "--strict", "--verbose=2", binaryPath]);
+  } catch (error) {
+    console.warn(
+      `codesign verify failed for ${binaryPath}, applying ad-hoc signature: ${error.message}`
+    );
+    await runCommand(codesignCommand, ["--force", "--sign", "-", binaryPath]);
+    await runCommand(codesignCommand, ["--verify", "--strict", "--verbose=2", binaryPath]);
+  }
+}
+
 async function pruneRuntimeFiles() {
   const betterSqliteDir = path.join(runtimeDir, "node_modules", "better-sqlite3");
   const removablePaths = [
@@ -258,8 +279,8 @@ exec "$DIR/${runtimeNodeFileName}" "$DIR/${bundleFileName}" "$@"
   const betterSqliteBinary = path.join(betterSqliteDir, "build", "Release", "better_sqlite3.node");
 
   await pruneRuntimeFiles();
-  await stripBinary(runtimeNodePath);
   await stripBinary(betterSqliteBinary);
+  await ensureExecutableSignature(runtimeNodePath);
 
   await runCommand(
     runtimeNodeSource,
