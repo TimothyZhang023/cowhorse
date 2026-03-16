@@ -47,6 +47,7 @@ import {
   Tooltip,
   Typography,
   Segmented,
+  Form,
 } from "antd";
 import { useEffect, useState } from "react";
 import { ChatMarketplace } from "./ChatMarketplace";
@@ -111,6 +112,7 @@ export default () => {
   const [testingServerId, setTestingServerId] = useState<number | null>(null);
   const [selectedServerIds, setSelectedServerIds] = useState<number[]>([]);
   const [marketMode, setMarketMode] = useState<"list" | "chat">("chat");
+  const [form] = Form.useForm();
 
   const loadData = async () => {
     setLoading(true);
@@ -788,13 +790,46 @@ export default () => {
         <ModalForm
           title={editingServer?.id ? "编辑 MCP 服务器" : "添加 MCP 服务器"}
           open={!!editingServer}
-          onOpenChange={(visible) => !visible && setEditingServer(null)}
+          form={form}
+          onOpenChange={(visible) => {
+            if (!visible) {
+              setEditingServer(null);
+              form.resetFields();
+            }
+          }}
           modalProps={{ 
             destroyOnHidden: true,
             width: 720,
             bodyStyle: { paddingTop: 24 }
           }}
           initialValues={editingServerInitialValues}
+          onValuesChange={(changedValues) => {
+            if (changedValues.raw_json) {
+              try {
+                const parsed = JSON.parse(changedValues.raw_json);
+                const updates: any = {};
+                
+                if (parsed.name) updates.name = parsed.name;
+                if (parsed.type) updates.type = parsed.type;
+                if (parsed.command) updates.command = parsed.command;
+                if (parsed.url) updates.url = parsed.url;
+                
+                if (parsed.args) {
+                  updates.args = Array.isArray(parsed.args) 
+                    ? parsed.args.join(" ") 
+                    : parsed.args;
+                }
+                
+                if (parsed.env) updates.env = stringifyJsonForEditor(parsed.env);
+                if (parsed.headers) updates.headers = stringifyJsonForEditor(parsed.headers);
+                if (parsed.auth) updates.auth = stringifyJsonForEditor(parsed.auth);
+                
+                form.setFieldsValue(updates);
+              } catch (e) {
+                // Ignore parsing errors while typing
+              }
+            }
+          }}
           onFinish={async (values) => {
             try {
               let formValues = { ...values };
@@ -815,7 +850,7 @@ export default () => {
               if (typeof formValues.args === "string") {
                 formValues.args = formValues.args
                   .split(/\s+/)
-                  .filter((s) => s.length > 0);
+                  .filter((s: string) => s.length > 0);
               }
 
               // Parsing optional JSON fields

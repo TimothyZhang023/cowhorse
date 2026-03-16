@@ -230,10 +230,18 @@ fn start_backend_sidecar(app: &AppHandle) -> tauri::Result<()> {
     while let Some(event) = rx.recv().await {
       match event {
         tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-          println!("sidecar: {}", String::from_utf8_lossy(&line));
+          let line_str = String::from_utf8_lossy(&line);
+          let trimmed = line_str.trim_end();
+          if !trimmed.is_empty() {
+            println!("sidecar: {}", trimmed);
+          }
         }
         tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-          eprintln!("sidecar error: {}", String::from_utf8_lossy(&line));
+          let line_str = String::from_utf8_lossy(&line);
+          let trimmed = line_str.trim_end();
+          if !trimmed.is_empty() {
+            eprintln!("sidecar error: {}", trimmed);
+          }
         }
         other => {
           println!("sidecar event: {other:?}");

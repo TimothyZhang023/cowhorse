@@ -18,6 +18,8 @@ const transport = pino.transport({
         colorize: true,
         translateTime: "HH:MM:ss",
         ignore: "pid,hostname",
+        singleLine: true,
+        sync: true,
       },
       level: "info",
     },

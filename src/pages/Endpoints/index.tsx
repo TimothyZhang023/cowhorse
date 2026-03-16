@@ -38,6 +38,7 @@ import {
   Checkbox,
   ConfigProvider,
   Drawer,
+  Input,
   Popconfirm,
   Space,
   Tag,
@@ -107,6 +108,7 @@ export default () => {
     null
   );
   const [selectedModelIds, setSelectedModelIds] = useState<number[]>([]);
+  const [modelSearchText, setModelSearchText] = useState("");
 
   const loadModelsForEndpoint = async (endpointId: number) => {
     const models = await getEndpointModels(endpointId);
@@ -150,9 +152,33 @@ export default () => {
     loadData();
   }, []);
 
-  const selectedEndpointModels = selectedEndpoint
-    ? modelsByEndpoint[selectedEndpoint.id] || []
-    : [];
+  const selectedEndpointModels = useMemo(() => {
+    const rawModels = selectedEndpoint
+      ? modelsByEndpoint[selectedEndpoint.id] || []
+      : [];
+
+    // Filter
+    const filtered = rawModels.filter((m) => {
+      if (!modelSearchText) return true;
+      const lowerSearch = modelSearchText.toLowerCase();
+      return (
+        m.model_id.toLowerCase().includes(lowerSearch) ||
+        (m.display_name || "").toLowerCase().includes(lowerSearch)
+      );
+    });
+
+    // Sort: is_enabled (1 first), then alphabetical by display_name or model_id
+    return [...filtered].sort((a, b) => {
+      const enabledA = Number(a.is_enabled) === 1;
+      const enabledB = Number(b.is_enabled) === 1;
+      if (enabledA !== enabledB) {
+        return enabledB ? 1 : -1;
+      }
+      const nameA = a.display_name || a.model_id;
+      const nameB = b.display_name || b.model_id;
+      return nameA.localeCompare(nameB);
+    });
+  }, [selectedEndpoint, modelsByEndpoint, modelSearchText]);
 
   const enabledModelOptions = useMemo(
     () =>
@@ -433,14 +459,6 @@ export default () => {
                   actions: {
                     render: (_, row) => (
                       <div className="cw-row-icon-actions">
-                        <Tooltip title="同步模型">
-                          <Button 
-                            type="text" 
-                            size="small" 
-                            icon={<SyncOutlined spin={syncingId === row.id} />} 
-                            onClick={() => handleSyncModels(row.id)} 
-                          />
-                        </Tooltip>
                         <Tooltip title="管理模型">
                           <Button
                             type="text"
@@ -547,6 +565,7 @@ export default () => {
             setSelectedEndpoint(null);
             setEditingModel(null);
             setSelectedModelIds([]);
+            setModelSearchText("");
           }}
         >
           {selectedEndpoint ? (
@@ -555,18 +574,39 @@ export default () => {
                 <Typography.Text type="secondary">
                   你可以手动录入模型名，并分别调整启用状态与高级参数。支持批量启用和批量禁用。
                 </Typography.Text>
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  onClick={() =>
-                    setEditingModel({
-                      is_enabled: 1,
-                    })
-                  }
-                >
-                  手动添加模型
-                </Button>
+                <Space>
+                  <Button
+                    type="primary"
+                    icon={<SyncOutlined spin={syncingId === selectedEndpoint.id} />}
+                    onClick={() => handleSyncModels(selectedEndpoint.id)}
+                  >
+                    同步模型
+                  </Button>
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() =>
+                      setEditingModel({
+                        is_enabled: 1,
+                      })
+                    }
+                  >
+                    手动添加模型
+                  </Button>
+                </Space>
               </Space>
+
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+                  搜索模型:
+                </Typography.Text>
+                <Input
+                  placeholder="按模型 ID 或显示名称搜索..."
+                  value={modelSearchText}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModelSearchText(e.target.value)}
+                  allowClear
+                  style={{ flex: 1 }}
+                />
+              </div>
 
               <Space wrap style={{ justifyContent: "space-between", width: "100%" }}>
                 <Space wrap>

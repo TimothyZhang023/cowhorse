@@ -30,7 +30,20 @@ export function createApp() {
   // Disable etag so frontend fetch wrappers won't receive 304 (which they treat as errors).
   app.set("etag", false);
 
-  app.use(pinoHttp({ logger }));
+  app.use(
+    pinoHttp({
+      logger,
+      // 禁用健康检查日志，减少干扰
+      autoLogging: {
+        ignore: (req) => req.url === "/health",
+      },
+      // 极简序列化，避免打印大对象
+      serializers: {
+        req: (req) => ({ method: req.method, url: req.url }),
+        res: (res) => ({ statusCode: res.statusCode }),
+      },
+    })
+  );
   app.use(cors());
   app.use(cookieParser());
   app.use(express.json({ limit: "20mb" })); // 支持 base64 图片上传

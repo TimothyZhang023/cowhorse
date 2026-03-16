@@ -101,6 +101,40 @@ npm run build:frontend
 npm run build:tauri
 ```
 
+### 4. macOS 安装说明
+
+如果通过 GitHub Releases 下载未签名的 `.dmg`，拖到 `/Applications` 后，macOS 仍可能因为 `com.apple.quarantine` 拦截启动。
+
+最省事的安装方式是用仓库自带脚本自动完成挂载、复制和解除 quarantine：
+
+```bash
+./scripts/install-macos-app.sh ~/Downloads/workhorse_2.0.1_aarch64.dmg
+```
+
+也支持直接传下载链接：
+
+```bash
+./scripts/install-macos-app.sh https://github.com/<owner>/<repo>/releases/download/<tag>/workhorse_2.0.1_aarch64.dmg
+```
+
+脚本默认安装到 `/Applications`，必要时会自动使用 `sudo`。如果你想安装到当前用户目录，也可以传第二个参数：
+
+```bash
+./scripts/install-macos-app.sh ~/Downloads/workhorse_2.0.1_aarch64.dmg "$HOME/Applications"
+```
+
+如果你不想用脚本，也可以手动执行：
+
+```bash
+xattr -rd com.apple.quarantine /Applications/workhorse.app
+```
+
+补充说明：
+
+- 当前 GitHub release workflow 在没有 Apple 签名 secrets 时仍会正常构建 unsigned macOS 包。
+- 如果后续补上 `Developer ID` 证书和 notarization 相关 secrets，现有 workflow 会自动切换到签名/公证发布。
+- unsigned 包更适合熟悉开发环境的用户，不适合作为面向普通 macOS 用户的“开箱即用”安装体验。
+
 ## 配置说明
 
 Workhorse 自带完整的可视化配置界面，但也支持通过环境变量进行高级微调：

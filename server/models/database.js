@@ -1194,9 +1194,20 @@ export function replaceModels(endpointGroupId, uid, models) {
     .map((item) => {
       const normalizedModelId = String(item?.model_id || "").trim();
       const existingRemote = existingRemoteByModelId.get(normalizedModelId);
+
+      // 如果模型已存在，保留其原有的启用状态、显示名称和配置，避免同步时被覆盖
+      const mergedData = existingRemote
+        ? {
+            ...item,
+            is_enabled: existingRemote.is_enabled,
+            display_name: existingRemote.display_name,
+            generation_config: existingRemote.generation_config,
+          }
+        : item;
+
       const normalized = normalizeStoredModel(
         {
-          ...item,
+          ...mergedData,
           id: Number(existingRemote?.id) > 0 ? Number(existingRemote.id) : nextId++,
           source: item?.source || "remote",
         },
@@ -1555,9 +1566,9 @@ export function createMcpServer(
       name,
       type,
       command || null,
-      args ? JSON.stringify(args) : "[]",
+      args ? (typeof args === "string" ? args : JSON.stringify(args)) : "[]",
       url || null,
-      isEnabled,
+      isEnabled ? 1 : 0,
       JSON.stringify(env || {}),
       JSON.stringify(headers || {}),
       encryptedAuth
@@ -1759,7 +1770,11 @@ export function updateSkill(id, uid, updates) {
       )
     ) {
       fields.push(`${key} = ?`);
-      values.push(typeof value === "object" ? JSON.stringify(value) : value);
+      let val = typeof value === "object" ? JSON.stringify(value) : value;
+      if (key === "is_enabled") {
+        val = value ? 1 : 0;
+      }
+      values.push(val);
     }
   }
   if (fields.length === 0) return;
@@ -1905,7 +1920,11 @@ export function updateAgentTask(id, uid, updates) {
       ].includes(key)
     ) {
       fields.push(`${key} = ?`);
-      values.push(typeof value === "object" ? JSON.stringify(value) : value);
+      let val = typeof value === "object" ? JSON.stringify(value) : value;
+      if (key === "is_active") {
+        val = value ? 1 : 0;
+      }
+      values.push(val);
     }
   }
   if (fields.length === 0) return;

@@ -372,10 +372,10 @@ router.post("/:id/models/sync", async (req, res) => {
     const { models: remoteModels, baseURL } = await fetchRemoteModels(endpoint);
 
     const normalizedModels = remoteModels
-      .map((model, index) => ({
+      .map((model) => ({
         model_id: model.id,
         display_name: model.id,
-        is_enabled: index === 0 ? 1 : 0,
+        is_enabled: 0,
         source: "remote",
       }))
       .filter((model) => !!model.model_id);

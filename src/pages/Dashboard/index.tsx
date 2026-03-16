@@ -612,14 +612,16 @@ export default () => {
                       <p>Token 占用实时分析，保障 Agent 长程记忆</p>
                     </div>
                     {contextBudget?.active_model && (
-                      <Tag
-                        color="blue"
-                        bordered={false}
-                        style={{ padding: "4px 12px" }}
-                      >
-                        {contextBudget.active_model.display_name ||
-                          contextBudget.active_model.model_id}
-                      </Tag>
+                      <Tooltip title="基于此模型的上下文窗口计算负载建议">
+                        <Tag
+                          color="blue"
+                          bordered={false}
+                          style={{ padding: "4px 12px", cursor: 'default' }}
+                        >
+                          参考模型: {contextBudget.active_model.display_name ||
+                            contextBudget.active_model.model_id}
+                        </Tag>
+                      </Tooltip>
                     )}
                   </div>
 

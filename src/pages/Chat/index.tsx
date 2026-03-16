@@ -103,8 +103,8 @@ const getToolMessageStatus = (
   return "success";
 };
 
-const STREAM_FLUSH_INTERVAL = 16;
-const STREAM_SEGMENT_DRAIN_INTERVAL = 20;
+const STREAM_FLUSH_INTERVAL = 48; // 增加刷新间隔
+const STREAM_SEGMENT_DRAIN_INTERVAL = 32; // 增加排放间隔
 const TITLE_REFRESH_DELAYS = [1200, 2600, 5000, 9000];
 
 type ChatDebugEvent = {
@@ -567,16 +567,34 @@ export default () => {
     [pushAgencyParams]
   );
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: loading ? "auto" : "smooth",
-      block: "end",
+  const isAtBottomRef = useRef(true);
+  const messagesAreaRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = useCallback(() => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    const threshold = 100;
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isAtBottomRef.current = isAtBottom;
+  }, []);
+
+  const scrollToBottom = useCallback((force = false) => {
+    if (!isAtBottomRef.current && !force) return;
+    
+    // 使用 requestAnimationFrame 确保在 DOM 更新后滚动
+    requestAnimationFrame(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({
+          behavior: force ? "smooth" : "auto",
+          block: "end",
+        });
+      }
     });
-  }, [loading]);
+  }, []);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+    scrollToBottom(loading && messages.length > 0 && messages[messages.length - 1].role === 'user');
+  }, [messages, scrollToBottom, loading]);
 
   useEffect(() => {
     return () => {
@@ -671,16 +689,24 @@ export default () => {
     if (streamSegmentDrainTimerRef.current !== null) return;
 
     const drain = () => {
-      if (streamSegmentQueueRef.current.length === 0) {
+      const queue = streamSegmentQueueRef.current;
+      if (queue.length === 0) {
         streamSegmentDrainTimerRef.current = null;
         return;
       }
 
-      const piece = streamSegmentQueueRef.current.shift();
-      if (piece) {
-        streamBufferRef.current += piece;
-        scheduleStreamFlush();
+      // 如果积压较多，一次多消耗几个段以跟上进度
+      const count = queue.length > 20 ? 5 : (queue.length > 10 ? 3 : 1);
+      
+      for (let i = 0; i < count; i++) {
+        const piece = queue.shift();
+        if (piece) {
+          streamBufferRef.current += piece;
+        }
       }
+      
+      scheduleStreamFlush();
+      
       streamSegmentDrainTimerRef.current = window.setTimeout(
         drain,
         STREAM_SEGMENT_DRAIN_INTERVAL
@@ -694,13 +720,8 @@ export default () => {
     (content?: string, error?: string) => {
       if (content) {
         const segments = splitIncomingStreamContent(content);
-        if (segments.length <= 1) {
-          streamBufferRef.current += segments[0] || content;
-          scheduleStreamFlush();
-        } else {
-          streamSegmentQueueRef.current.push(...segments);
-          scheduleSegmentDrain();
-        }
+        streamSegmentQueueRef.current.push(...segments);
+        scheduleSegmentDrain();
       }
       if (error) {
         streamErrorRef.current = error;
@@ -713,7 +734,6 @@ export default () => {
       flushPendingStreamSegmentsNow,
       flushStreamBuffer,
       scheduleSegmentDrain,
-      scheduleStreamFlush,
     ]
   );
 
@@ -1554,13 +1574,6 @@ export default () => {
           <AppstoreOutlined />
           <span>{activeAgent?.name || "main"}</span>
         </div>
-        <Button
-          type="text"
-          size="small"
-          onClick={() => pushAgencyParams({ agent: null, conversationId: null })}
-        >
-          返回 Agency
-        </Button>
       </div>
 
       <div className="agent-conversation-head">
@@ -1821,7 +1834,11 @@ export default () => {
           ) : (
             <div className="chat-main">
               <div className="chat-center">
-              <div className="messages-area">
+              <div 
+                className="messages-area" 
+                ref={messagesAreaRef}
+                onScroll={handleScroll}
+              >
                 {!currentConvId ? (
                   agentEmptyContent
                 ) : messages.length === 0 ? (
@@ -1846,7 +1863,9 @@ export default () => {
                           <ToolOutlined />
                         </Avatar>
                       )}
-                      <div className={`message-bubble ${msg.role}`}>
+                      <div className={`message-bubble ${msg.role} ${
+                        loading && idx === lastAssistantIdx ? "no-animation" : ""
+                      }`}>
                         {msg.role === "user" ? (
                           <div className="user-content">
                             {hasImage(msg.content) && (

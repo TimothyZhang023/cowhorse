@@ -186,35 +186,45 @@
    Conversation List
    ============================================================ */
 .conv-list-label {
-  padding: 0 12px;
-  margin-bottom: 6px;
+  padding: 0 4px;
+  margin-bottom: 8px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  opacity: 0.8;
 }
 
 .conversation-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 12px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
   cursor: pointer;
-  margin-bottom: 2px;
-  transition: background 0.15s;
-  color: var(--text-primary);
-  min-height: 38px;
+  margin-bottom: 4px;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  min-height: 44px; /* Fix height */
 }
 
 .conversation-item:hover {
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .conversation-item.active {
+  background: white;
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.12);
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] .conversation-item.active {
   background: var(--bg-active);
-  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.2);
 }
 
 .conv-title {
@@ -222,8 +232,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  margin-right: 4px;
+  font-size: 13.5px;
+  font-weight: 500;
+  margin-right: 8px;
 }
 
 .conv-actions {
@@ -339,42 +350,67 @@
 }
 
 .conversation-panel {
-  width: 320px;
+  width: 300px;
   border-left: 1px solid var(--border-color);
-  background: var(--bg-sider);
+  background: #fcfdfe;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 12px 10px;
+  padding: 20px 16px;
+}
+
+[data-theme="dark"] .conversation-panel {
+  background: var(--bg-sider);
 }
 
 .conversation-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 28px;
 }
 
 .conversation-panel-title {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
+  gap: 10px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
 .conversation-search {
-  margin-bottom: 10px;
+  margin-bottom: 20px;
+}
+
+.conversation-search .ant-input-affix-wrapper {
+  background: #f1f5f9 !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  padding: 4px 10px !important;
+  transition: all 0.2s !important;
+}
+
+[data-theme="dark"] .conversation-search .ant-input-affix-wrapper {
+  background: #1e293b !important;
+}
+
+.conversation-search input {
+  font-size: 13px !important;
+}
+
+.conversation-search .ant-input-affix-wrapper-focused {
+  background: white !important;
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1) !important;
 }
 
 .agency-section-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  margin: 6px 0 8px;
-  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  margin: 0;
 }
 
 .agency-agents {
@@ -430,7 +466,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .agent-binding-tip {
@@ -613,6 +649,7 @@
 .messages-area {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: auto !important;
   padding: 24px 8%;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
@@ -724,6 +761,10 @@
   word-break: break-word;
   animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: var(--shadow-sm);
+}
+
+.message-bubble.no-animation {
+  animation: none !important;
 }
 
 .message-bubble.user {
