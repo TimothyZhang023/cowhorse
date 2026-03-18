@@ -3,8 +3,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const runConversationMessageMock = vi.fn();
 
-vi.mock("../server/routes/conversations.js", async () => {
-  const actual = await vi.importActual("../server/routes/conversations.js");
+vi.mock("../server/models/agentConversation.js", async () => {
+  const actual = await vi.importActual("../server/models/agentConversation.js");
   return {
     ...actual,
     runConversationMessage: runConversationMessageMock,
@@ -58,9 +58,9 @@ describe("channel-webhooks inbound agent flow", () => {
 
     const res = await request(app)
       .post(
-        `/api/channel-webhooks/dingtalk/${dingtalkChannel.id}?uid=${encodeURIComponent(
-          dingtalkChannel.uid
-        )}`
+        `/api/channel-webhooks/dingtalk/${
+          dingtalkChannel.id
+        }?uid=${encodeURIComponent(dingtalkChannel.uid)}`
       )
       .send({
         senderStaffId: "user-001",
@@ -87,17 +87,19 @@ describe("channel-webhooks inbound agent flow", () => {
   it("reuses the same session conversation for the same dingtalk participant", async () => {
     runConversationMessageMock.mockClear();
 
-    runConversationMessageMock.mockImplementationOnce(async ({ conversationId }) => ({
-      conversationId: String(conversationId),
-      assistantMessageId: 89,
-      finalResponse: "第一次",
-    }));
+    runConversationMessageMock.mockImplementationOnce(
+      async ({ conversationId }) => ({
+        conversationId: String(conversationId),
+        assistantMessageId: 89,
+        finalResponse: "第一次",
+      })
+    );
 
     await request(app)
       .post(
-        `/api/channel-webhooks/dingtalk/${dingtalkChannel.id}?uid=${encodeURIComponent(
-          dingtalkChannel.uid
-        )}`
+        `/api/channel-webhooks/dingtalk/${
+          dingtalkChannel.id
+        }?uid=${encodeURIComponent(dingtalkChannel.uid)}`
       )
       .send({
         senderStaffId: "same-user",
@@ -106,17 +108,19 @@ describe("channel-webhooks inbound agent flow", () => {
       })
       .expect(200);
 
-    runConversationMessageMock.mockImplementationOnce(async ({ conversationId }) => ({
-      conversationId: String(conversationId),
-      assistantMessageId: 90,
-      finalResponse: "第二次",
-    }));
+    runConversationMessageMock.mockImplementationOnce(
+      async ({ conversationId }) => ({
+        conversationId: String(conversationId),
+        assistantMessageId: 90,
+        finalResponse: "第二次",
+      })
+    );
 
     await request(app)
       .post(
-        `/api/channel-webhooks/dingtalk/${dingtalkChannel.id}?uid=${encodeURIComponent(
-          dingtalkChannel.uid
-        )}`
+        `/api/channel-webhooks/dingtalk/${
+          dingtalkChannel.id
+        }?uid=${encodeURIComponent(dingtalkChannel.uid)}`
       )
       .send({
         senderStaffId: "same-user",
@@ -125,9 +129,9 @@ describe("channel-webhooks inbound agent flow", () => {
       })
       .expect(200);
 
-    expect(runConversationMessageMock.mock.calls.at(-2)?.[0]?.conversationId).toBe(
-      runConversationMessageMock.mock.calls.at(-1)?.[0]?.conversationId
-    );
+    expect(
+      runConversationMessageMock.mock.calls.at(-2)?.[0]?.conversationId
+    ).toBe(runConversationMessageMock.mock.calls.at(-1)?.[0]?.conversationId);
   });
 
   it("creates a fresh conversation on /new without executing the agent", async () => {
@@ -135,9 +139,9 @@ describe("channel-webhooks inbound agent flow", () => {
 
     const res = await request(app)
       .post(
-        `/api/channel-webhooks/telegram/${telegramChannel.id}?uid=${encodeURIComponent(
-          telegramChannel.uid
-        )}`
+        `/api/channel-webhooks/telegram/${
+          telegramChannel.id
+        }?uid=${encodeURIComponent(telegramChannel.uid)}`
       )
       .set("X-Telegram-Bot-Api-Secret-Token", "tg-secret")
       .send({
@@ -163,9 +167,9 @@ describe("channel-webhooks inbound agent flow", () => {
 
     await request(app)
       .post(
-        `/api/channel-webhooks/telegram/${telegramChannel.id}?uid=${encodeURIComponent(
-          telegramChannel.uid
-        )}`
+        `/api/channel-webhooks/telegram/${
+          telegramChannel.id
+        }?uid=${encodeURIComponent(telegramChannel.uid)}`
       )
       .set("X-Telegram-Bot-Api-Secret-Token", "tg-secret")
       .send({
@@ -193,9 +197,9 @@ describe("channel-webhooks inbound agent flow", () => {
 
     const res = await request(app)
       .post(
-        `/api/channel-webhooks/telegram/${telegramChannel.id}?uid=${encodeURIComponent(
-          telegramChannel.uid
-        )}`
+        `/api/channel-webhooks/telegram/${
+          telegramChannel.id
+        }?uid=${encodeURIComponent(telegramChannel.uid)}`
       )
       .set("X-Telegram-Bot-Api-Secret-Token", "tg-secret")
       .send({

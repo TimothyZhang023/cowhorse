@@ -3,7 +3,7 @@ import {
   normalizeMessageForClient,
   buildConversationSystemPrompt,
   resolveEndpointGenerationConfig,
-} from "../server/routes/conversations.js";
+} from "../server/models/agentConversation.js";
 import {
   createSkill,
   createUser,
@@ -31,7 +31,7 @@ describe("conversation message normalization", () => {
         type: "function",
         function: {
           name: "get-sum",
-          arguments: "{\"a\":1,\"b\":2}",
+          arguments: '{"a":1,"b":2}',
         },
       },
     ];
@@ -75,7 +75,11 @@ describe("conversation message normalization", () => {
       [],
       { is_enabled: 0 }
     );
-    setAppSetting(user.uid, "global_system_prompt_markdown", "始终先确认目标。");
+    setAppSetting(
+      user.uid,
+      "global_system_prompt_markdown",
+      "始终先确认目标。"
+    );
 
     const prompt = buildConversationSystemPrompt(user.uid, {
       system_prompt: "你需要帮用户执行一个完整任务。",

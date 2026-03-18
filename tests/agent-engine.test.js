@@ -5,6 +5,8 @@ import {
   isUsableFinalResponse,
   registerToolCall,
   resolveInitialUserMessage,
+  selectTaskSkills,
+  selectTaskTools,
 } from "../server/models/agentEngine.js";
 
 describe("agentEngine", () => {
@@ -55,9 +57,7 @@ describe("agentEngine", () => {
     expect(registerToolCall(toolCallCounts, toolCall, 2).overBudget).toBe(
       false
     );
-    expect(registerToolCall(toolCallCounts, toolCall, 2).overBudget).toBe(
-      true
-    );
+    expect(registerToolCall(toolCallCounts, toolCall, 2).overBudget).toBe(true);
   });
 
   it("rejects tool-call style wrap-up content and falls back to tool summaries", () => {
@@ -79,5 +79,26 @@ describe("agentEngine", () => {
         "已停止重复工具调用。"
       )
     ).toContain("The sum of 10 and 2 is 12.");
+  });
+
+  it("respects task-level skill selection when provided", () => {
+    const selected = selectTaskSkills({ skill_ids: [2] }, [
+      { id: 1, is_enabled: 1, name: "A" },
+      { id: 2, is_enabled: 1, name: "B" },
+      { id: 3, is_enabled: 0, name: "C" },
+    ]);
+
+    expect(selected.map((skill) => skill.name)).toEqual(["B"]);
+  });
+
+  it("respects task-level tool selection when provided", () => {
+    const selected = selectTaskTools({ tool_names: ["shell_execute"] }, [
+      { function: { name: "shell_execute" } },
+      { function: { name: "ddg-search" } },
+    ]);
+
+    expect(selected.map((tool) => tool.function.name)).toEqual([
+      "shell_execute",
+    ]);
   });
 });

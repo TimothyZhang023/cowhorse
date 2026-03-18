@@ -7,14 +7,22 @@ import {
   createConversation,
   getAgentTask,
   getAppSetting,
-  listSkills,
   logUsage,
   updateTaskRun,
   updateConversationContextWindow,
   updateConversationSystemPrompt,
 } from "./database.js";
-import { executeMcpTool, getAllAvailableTools } from "./mcpManager.js";
-import { buildTaskSystemPrompt } from "../utils/agentPromptBuilder.js";
+import {
+  executeAgentToolCall,
+  requestAgentTurnWithFallback,
+  requestForcedFinalAgentResponse,
+} from "./agentExecutionCore.js";
+import {
+  buildAgentSystemPrompt,
+  prepareAgentTooling,
+  selectAgentSkills,
+  selectAgentTools,
+} from "./agentRuntimeConfig.js";
 import {
   estimateMessagesTokens,
   estimateToolSchemaTokens,
@@ -23,7 +31,6 @@ import {
   truncateTextToTokenBudget,
 } from "../utils/contextBudget.js";
 import {
-  getEndpointCandidatesForModel,
   findModelConfigForEndpoint,
   mergeGenerationConfig,
   resolveEndpointModelPair,
@@ -33,6 +40,14 @@ import { getTaskConfig } from "../utils/systemConfig.js";
 const DEFAULT_MAX_TURNS = 100;
 const DEFAULT_MAX_TOOL_CALLS_PER_SIGNATURE = 100;
 const RECENT_MESSAGES_TO_KEEP = 8;
+
+export function selectTaskSkills(task, allSkills = []) {
+  return selectAgentSkills(allSkills, task?.skill_ids);
+}
+
+export function selectTaskTools(task, allTools = []) {
+  return selectAgentTools(allTools, task?.tool_names);
+}
 
 function sortJsonValue(value) {
   if (Array.isArray(value)) {
@@ -84,7 +99,9 @@ export function registerToolCall(
 }
 
 function normalizeInlineText(value, maxLength = 220) {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalized) {
     return "";
   }
@@ -105,7 +122,10 @@ export function isUsableFinalResponse(content) {
 
 export function buildFallbackFinalResponse(messages, reason) {
   const recentToolResults = messages
-    .filter((message) => message.role === "tool" && normalizeInlineText(message.content))
+    .filter(
+      (message) =>
+        message.role === "tool" && normalizeInlineText(message.content)
+    )
     .slice(-3)
     .map((message) => {
       const toolName = message.name || "tool";
@@ -141,46 +161,36 @@ async function requestForcedFinalResponse({
   endpointName,
   reason,
   runId,
+  generationConfig = {},
 }) {
   logger.warn(
     { uid, conversationId, modelId, reason },
     "[AgentEngine] Forcing final summary"
   );
-  safeAddRunEvent(
-    runId,
-    uid,
-    "forced_summary",
-    "触发强制总结",
-    reason,
-    { modelId }
-  );
-
-  const summaryMessages = [
-    ...messages,
-    {
-      role: "user",
-      content: `[TASK_WRAP_UP] ${reason}\n请基于已经拿到的上下文和工具结果，直接输出纯文本最终结论。不要继续调用工具，不要输出 XML、JSON、<tool_call>、函数名或参数块。\n输出格式：\n结论：...\n依据：...\n下一步：如无则写“无”。`,
-    },
-  ];
-
-  const completion = await client.chat.completions.create({
-    model: modelId,
-    messages: summaryMessages,
+  safeAddRunEvent(runId, uid, "forced_summary", "触发强制总结", reason, {
+    modelId,
   });
 
-  if (completion.usage) {
-    logUsage({
-      uid,
-      conversationId,
-      model: modelId,
-      endpointName,
-      promptTokens: completion.usage.prompt_tokens,
-      completionTokens: completion.usage.completion_tokens,
-      source: "agent_task",
-    });
-  }
+  const content = await requestForcedFinalAgentResponse({
+    client,
+    modelId,
+    messages,
+    wrapUpPrompt: `[TASK_WRAP_UP] ${reason}\n请基于已经拿到的上下文和工具结果，直接输出纯文本最终结论。不要继续调用工具，不要输出 XML、JSON、<tool_call>、函数名或参数块。\n输出格式：\n结论：...\n依据：...\n下一步：如无则写“无”。`,
+    generationConfig,
+    onUsage: (usage) => {
+      if (!usage) return;
+      logUsage({
+        uid,
+        conversationId,
+        model: modelId,
+        endpointName,
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        source: "agent_task",
+      });
+    },
+  });
 
-  const content = String(completion.choices?.[0]?.message?.content || "").trim();
   if (isUsableFinalResponse(content)) {
     return content;
   }
@@ -321,7 +331,10 @@ async function maybeCompactTaskContext({
     const summaryCompletion = await client.chat.completions.create({
       model: modelId,
       temperature: 0.2,
-      max_tokens: Math.min(2048, Math.max(512, Math.floor(contextWindow * 0.04))),
+      max_tokens: Math.min(
+        2048,
+        Math.max(512, Math.floor(contextWindow * 0.04))
+      ),
       messages: [
         {
           role: "system",
@@ -335,7 +348,9 @@ async function maybeCompactTaskContext({
       ],
     });
 
-    summary = String(summaryCompletion.choices?.[0]?.message?.content || "").trim();
+    summary = String(
+      summaryCompletion.choices?.[0]?.message?.content || ""
+    ).trim();
 
     if (summaryCompletion.usage) {
       logUsage({
@@ -397,13 +412,17 @@ async function maybeCompactTaskContext({
 }
 
 async function executePreparedTaskRun(execution) {
-  const { uid, task, taskId, options, conversationId, initialUserMessage, runId } =
-    execution;
+  const {
+    uid,
+    task,
+    taskId,
+    options,
+    conversationId,
+    initialUserMessage,
+    runId,
+  } = execution;
 
   // Gather Skills
-  const allSkills = listSkills(uid);
-  const taskSkills = allSkills.filter((skill) => Number(skill.is_enabled) === 1);
-
   const globalPromptMarkdown = getAppSetting(
     uid,
     "global_system_prompt_markdown",
@@ -411,9 +430,10 @@ async function executePreparedTaskRun(execution) {
   );
 
   // Build combined system prompt (task + global markdown extension + skill bundle)
-  const systemPrompt = buildTaskSystemPrompt({
-    taskSystemPrompt: task.system_prompt,
-    taskSkills,
+  const systemPrompt = buildAgentSystemPrompt({
+    uid,
+    baseSystemPrompt: task.system_prompt,
+    skillIds: task.skill_ids,
     globalMarkdown: globalPromptMarkdown,
   });
 
@@ -421,17 +441,19 @@ async function executePreparedTaskRun(execution) {
   updateConversationSystemPrompt(conversationId, uid, systemPrompt);
 
   // Gather Tools
-  const mcpTools = await getAllAvailableTools(uid).catch(() => []);
-  const requestTools = mcpTools;
-  // Strip internal _mcp_server_id for OpenAI
-  const openaiTools = requestTools.map(({ _mcp_server_id, ...t }) => t);
+  const { requestTools, openaiTools } = await prepareAgentTooling(uid, {
+    toolNames: task.tool_names,
+  });
 
   // Initialize messages
   const messages = [{ role: "system", content: systemPrompt }];
   messages.push({ role: "user", content: initialUserMessage });
   addMessage(conversationId, uid, "user", initialUserMessage);
 
-  const { endpoint: ep, modelId } = resolveEndpointModelPair(uid);
+  const { endpoint: ep, modelId } = resolveEndpointModelPair(
+    uid,
+    task.model_id
+  );
   if (!ep) throw new Error("No API endpoint configured");
   if (!modelId) throw new Error("No enabled model configured");
   const modelGenerationConfig =
@@ -440,10 +462,12 @@ async function executePreparedTaskRun(execution) {
   updateConversationContextWindow(conversationId, uid, contextWindow);
 
   const baseUrl = ep.base_url.replace(/\/+$/, "");
-  const client = new OpenAI({
+  let activeClient = new OpenAI({
     apiKey: ep.api_key,
     baseURL: baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`,
   });
+  let activeEndpoint = ep;
+  let activeGenerationConfig = mergeGenerationConfig(modelGenerationConfig);
 
   let turnCount = 0;
   let finalResponse = "";
@@ -468,18 +492,18 @@ async function executePreparedTaskRun(execution) {
         "turn_started",
         `第 ${turnCount} 轮`,
         `开始调用模型 ${modelId}`,
-        { turn: turnCount, modelId, endpointName: ep.name }
+        { turn: turnCount, modelId, endpointName: activeEndpoint.name }
       );
 
       const compactedState = await maybeCompactTaskContext({
-        client,
+        client: activeClient,
         modelId,
         messages,
         openaiTools,
         contextWindow,
         uid,
         conversationId,
-        endpointName: ep.name,
+        endpointName: activeEndpoint.name,
         runId,
         turn: turnCount,
       });
@@ -487,39 +511,42 @@ async function executePreparedTaskRun(execution) {
         messages.splice(0, messages.length, ...compactedState.messages);
       }
 
-      let completion = null;
-      let completionEndpoint = ep;
-      let lastAttemptError = null;
+      const completionAttempt = await requestAgentTurnWithFallback({
+        uid,
+        modelCandidates: [modelId],
+        messages,
+        openaiTools: openaiTools.length > 0 ? openaiTools : undefined,
+        stream: false,
+        resolveGenerationConfig: (candidateEndpoint, candidateModelId) =>
+          mergeGenerationConfig(
+            findModelConfigForEndpoint(
+              candidateEndpoint.id,
+              uid,
+              candidateModelId
+            )?.generation_config || {}
+          ),
+        getErrorMessage: (error) =>
+          error instanceof Error
+            ? error.message
+            : String(error || "Unknown error"),
+      });
 
-      for (const candidateEndpoint of getEndpointCandidatesForModel(uid, modelId)) {
-        const candidateBaseUrl = candidateEndpoint.base_url.replace(/\/+$/, "");
-        const candidateClient = new OpenAI({
-          apiKey: candidateEndpoint.api_key,
-          baseURL: candidateBaseUrl.endsWith("/v1")
-            ? candidateBaseUrl
-            : `${candidateBaseUrl}/v1`,
-        });
-
-        try {
-          completion = await candidateClient.chat.completions.create({
-            model: modelId,
-            messages,
-            tools: openaiTools.length > 0 ? openaiTools : undefined,
-            ...mergeGenerationConfig(
-              findModelConfigForEndpoint(candidateEndpoint.id, uid, modelId)
-                ?.generation_config || {}
-            ),
-          });
-          completionEndpoint = candidateEndpoint;
-          break;
-        } catch (error) {
-          lastAttemptError = error;
-        }
+      if (!completionAttempt.ok) {
+        throw (
+          completionAttempt.lastError ||
+          new Error("All candidate endpoints failed")
+        );
       }
 
-      if (!completion) {
-        throw lastAttemptError || new Error("All candidate endpoints failed");
-      }
+      const {
+        completion,
+        client: completionClient,
+        endpoint: completionEndpoint,
+        endpointGenerationConfig,
+      } = completionAttempt;
+      activeClient = completionClient;
+      activeEndpoint = completionEndpoint;
+      activeGenerationConfig = endpointGenerationConfig;
 
       const aiMsg = completion.choices[0].message;
       messages.push(aiMsg);
@@ -597,97 +624,79 @@ async function executePreparedTaskRun(execution) {
             continue;
           }
 
-          const toolDef = requestTools.find(
-            (t) => t.function.name === toolCall.function.name
-          );
-          if (!toolDef) {
-            messages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: "Error: Tool not found or access denied.",
-            });
-            safeAddRunEvent(
+          const toolExecution = await executeAgentToolCall({
+            uid,
+            requestTools,
+            toolCall,
+            executionScope: {
+              uid,
+              conversationId,
               runId,
-              uid,
-              "tool_failed",
-              `${toolCall.function.name} 不可用`,
-              "Tool not found or access denied.",
-              { turn: turnCount }
-            );
-            continue;
-          }
+              taskId,
+            },
+          });
 
-          try {
-            const args = JSON.parse(toolCall.function.arguments);
-            const result = await executeMcpTool(
-              uid,
-              toolDef._mcp_server_id,
-              toolCall.function.name,
-              args
-            );
-
-            const resultStr =
-              (result.content || [])
-                .map((c) =>
-                  typeof c.text === "string" ? c.text : JSON.stringify(c)
-                )
-                .join("\n") || JSON.stringify(result);
+          if (toolExecution.ok) {
             messages.push({
               role: "tool",
               tool_call_id: toolCall.id,
               name: toolCall.function.name,
-              content: resultStr,
+              content: toolExecution.resultText,
             });
 
-            // Save tool result
             addMessage(
               conversationId,
               uid,
               "tool",
-              `[TOOL_RESULT:${toolCall.id}:${toolCall.name}]:${resultStr}`
+              `[TOOL_RESULT:${toolCall.id}:${toolCall.function.name}]:${toolExecution.resultText}`
             );
             safeAddRunEvent(
               runId,
               uid,
               "tool_completed",
               `${toolCall.function.name} 执行完成`,
-              normalizeInlineText(resultStr, 500),
-              { turn: turnCount, arguments: args }
+              normalizeInlineText(toolExecution.resultText, 500),
+              { turn: turnCount, arguments: toolExecution.args || {} }
             );
-          } catch (e) {
-            const errMsg = `Tool execution failed: ${e.message}`;
-            messages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: errMsg,
-            });
-            addMessage(
-              conversationId,
-              uid,
-              "tool",
-              `[TOOL_RESULT:${toolCall.id}:${toolCall.name}]:${errMsg}`
-            );
-            safeAddRunEvent(
-              runId,
-              uid,
-              "tool_failed",
-              `${toolCall.function.name} 执行失败`,
-              errMsg,
-              { turn: turnCount }
-            );
+            continue;
           }
+
+          const errMsg = toolExecution.errorMessage;
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            name: toolCall.function.name,
+            content: errMsg,
+          });
+          addMessage(
+            conversationId,
+            uid,
+            "tool",
+            `[TOOL_RESULT:${toolCall.id}:${toolCall.function.name}]:${errMsg}`
+          );
+          safeAddRunEvent(
+            runId,
+            uid,
+            "tool_failed",
+            `${toolCall.function.name} 执行失败`,
+            errMsg,
+            { turn: turnCount }
+          );
         }
 
         if (shouldForceSummary) {
           finalResponse = await requestForcedFinalResponse({
-            client,
+            client: activeClient,
             modelId,
             messages,
             uid,
             conversationId,
-            endpointName: ep.name,
+            endpointName: activeEndpoint.name,
             reason: `检测到重复工具调用，单工具同参预算为 ${maxToolCallsPerSignature} 次。`,
             runId,
+            generationConfig: mergeGenerationConfig(activeGenerationConfig, {
+              max_tokens: 2048,
+            }),
           });
           addMessage(conversationId, uid, "assistant", finalResponse);
           safeAddRunEvent(
@@ -718,14 +727,17 @@ async function executePreparedTaskRun(execution) {
 
     if (!finalResponsePersisted) {
       finalResponse = await requestForcedFinalResponse({
-        client,
+        client: activeClient,
         modelId,
         messages,
         uid,
         conversationId,
-        endpointName: ep.name,
+        endpointName: activeEndpoint.name,
         reason: `已达到最大执行轮数 ${maxTurns}，停止继续调用工具。`,
         runId,
+        generationConfig: mergeGenerationConfig(activeGenerationConfig, {
+          max_tokens: 2048,
+        }),
       }).catch((error) => {
         logger.error(
           { err: error, uid, conversationId, taskId },

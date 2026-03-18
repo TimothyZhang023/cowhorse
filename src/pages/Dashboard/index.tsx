@@ -82,6 +82,12 @@ type SystemOverviewData = {
     }>;
   };
   recommendations: string[];
+  meta?: {
+    cached: boolean;
+    refreshing: boolean;
+    updated_at: string;
+    cache_ttl_ms: number;
+  };
 };
 
 type BackendHealthData = {
@@ -98,6 +104,7 @@ type BackendServiceState = "checking" | "healthy" | "degraded" | "restarting";
 const HEARTBEAT_INTERVAL_MS = 15000;
 const HEARTBEAT_TIMEOUT_MS = 5000;
 const AUTO_RESTART_THRESHOLD = 3;
+const OVERVIEW_REFRESH_DELAY_MS = 1500;
 
 async function restartDesktopBackend() {
   const { invoke } = await import("@tauri-apps/api/core");
@@ -142,16 +149,36 @@ export default () => {
   const restartInFlightRef = useRef(false);
   const failureCountRef = useRef(0);
   const hasSeenHealthyRef = useRef(false);
+  const overviewRefreshTimerRef = useRef<number | null>(null);
 
-  const loadOverview = async () => {
-    setOverviewLoading(true);
+  const clearOverviewRefreshTimer = () => {
+    if (overviewRefreshTimerRef.current !== null) {
+      window.clearTimeout(overviewRefreshTimerRef.current);
+      overviewRefreshTimerRef.current = null;
+    }
+  };
+
+  const loadOverview = async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setOverviewLoading(true);
+    }
     try {
       const data = await request<SystemOverviewData>("/api/system/overview");
       setOverview(data);
+
+      clearOverviewRefreshTimer();
+      if (data?.meta?.refreshing) {
+        overviewRefreshTimerRef.current = window.setTimeout(() => {
+          void loadOverview({ silent: true });
+        }, OVERVIEW_REFRESH_DELAY_MS);
+      }
     } catch (error) {
       setOverview(null);
     } finally {
-      setOverviewLoading(false);
+      if (!silent) {
+        setOverviewLoading(false);
+      }
     }
   };
 
@@ -286,6 +313,7 @@ export default () => {
 
     return () => {
       window.clearInterval(timer);
+      clearOverviewRefreshTimer();
     };
   }, [isLoggedIn]);
 
@@ -305,16 +333,16 @@ export default () => {
     backendState === "healthy"
       ? "success"
       : backendState === "restarting"
-        ? "processing"
-        : "error";
+      ? "processing"
+      : "error";
   const backendTagLabel =
     backendState === "healthy"
       ? "正常"
       : backendState === "restarting"
-        ? "重启中"
-        : backendState === "checking"
-          ? "检测中"
-          : "异常";
+      ? "重启中"
+      : backendState === "checking"
+      ? "检测中"
+      : "异常";
 
   return (
     <ConfigProvider
@@ -539,7 +567,11 @@ export default () => {
                                 : item.error || "missing"}
                             </div>
                           </div>
-                          <div className={`cw-status-indicator ${item.installed ? "online" : "offline"}`}></div>
+                          <div
+                            className={`cw-status-indicator ${
+                              item.installed ? "online" : "offline"
+                            }`}
+                          ></div>
                         </div>
                       ))}
                     </div>
@@ -548,7 +580,10 @@ export default () => {
               </Col>
 
               <Col xs={24} lg={6}>
-                <Card className="cw-module-card cw-backend-service-card" style={{ padding: '20px' }}>
+                <Card
+                  className="cw-module-card cw-backend-service-card"
+                  style={{ padding: "20px" }}
+                >
                   <div className="cw-usage-header" style={{ marginBottom: 12 }}>
                     <div>
                       <h3 style={{ fontSize: 18 }}>服务巡检</h3>
@@ -566,38 +601,80 @@ export default () => {
                   <div className="cw-health-grid">
                     <div className="cw-health-row compact">
                       <div className="cw-health-info">
-                        <div className="cw-health-name" style={{ fontSize: 13 }}>后端服务</div>
+                        <div
+                          className="cw-health-name"
+                          style={{ fontSize: 13 }}
+                        >
+                          后端服务
+                        </div>
                         <div className="cw-health-ver">{backendTagLabel}</div>
                       </div>
-                      <div className={`cw-status-indicator ${backendState === 'healthy' ? 'online' : 'offline'}`}></div>
+                      <div
+                        className={`cw-status-indicator ${
+                          backendState === "healthy" ? "online" : "offline"
+                        }`}
+                      ></div>
                     </div>
-                    
+
                     <div className="cw-health-row compact">
                       <div className="cw-health-info">
-                        <div className="cw-health-name" style={{ fontSize: 13 }}>自动重启</div>
-                        <div className="cw-health-ver">{backendRestartCount} 次</div>
+                        <div
+                          className="cw-health-name"
+                          style={{ fontSize: 13 }}
+                        >
+                          自动重启
+                        </div>
+                        <div className="cw-health-ver">
+                          {backendRestartCount} 次
+                        </div>
                       </div>
-                      <Tag color={backendRestartCount > 0 ? "warning" : "default"} style={{ margin: 0, fontSize: 10, padding: '0 4px' }}>
+                      <Tag
+                        color={backendRestartCount > 0 ? "warning" : "default"}
+                        style={{ margin: 0, fontSize: 10, padding: "0 4px" }}
+                      >
                         CNT
                       </Tag>
                     </div>
 
                     <div className="cw-health-row compact">
                       <div className="cw-health-info">
-                        <div className="cw-health-name" style={{ fontSize: 13 }}>连续失败</div>
-                        <div className="cw-health-ver">{backendFailureCount} 次</div>
+                        <div
+                          className="cw-health-name"
+                          style={{ fontSize: 13 }}
+                        >
+                          连续失败
+                        </div>
+                        <div className="cw-health-ver">
+                          {backendFailureCount} 次
+                        </div>
                       </div>
                     </div>
 
                     <div className="cw-health-row compact">
                       <div className="cw-health-info">
-                        <div className="cw-health-name" style={{ fontSize: 13 }}>最近检测</div>
-                        <div className="cw-health-ver">{backendLastCheckedAt ? backendLastCheckedAt.toLocaleTimeString() : '-'}</div>
+                        <div
+                          className="cw-health-name"
+                          style={{ fontSize: 13 }}
+                        >
+                          最近检测
+                        </div>
+                        <div className="cw-health-ver">
+                          {backendLastCheckedAt
+                            ? backendLastCheckedAt.toLocaleTimeString()
+                            : "-"}
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--ant-color-text-description)' }}>
+                  <div
+                    style={{
+                      marginTop: 12,
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: "var(--ant-color-text-description)",
+                    }}
+                  >
                     {backendMessage}
                   </div>
                 </Card>
@@ -616,9 +693,10 @@ export default () => {
                         <Tag
                           color="blue"
                           bordered={false}
-                          style={{ padding: "4px 12px", cursor: 'default' }}
+                          style={{ padding: "4px 12px", cursor: "default" }}
                         >
-                          参考模型: {contextBudget.active_model.display_name ||
+                          参考模型:{" "}
+                          {contextBudget.active_model.display_name ||
                             contextBudget.active_model.model_id}
                         </Tag>
                       </Tooltip>
@@ -753,8 +831,9 @@ export default () => {
                           </div>
                         </div>
                         <div
-                          className={`cw-status-indicator ${item.reachable ? "online" : "offline"
-                            }`}
+                          className={`cw-status-indicator ${
+                            item.reachable ? "online" : "offline"
+                          }`}
                         ></div>
                       </div>
                     ))}
@@ -796,7 +875,10 @@ export default () => {
                             ></span>
                           </div>
                           <div className="cw-run-info">
-                            <div className="cw-run-title" style={{ fontSize: 13 }}>
+                            <div
+                              className="cw-run-title"
+                              style={{ fontSize: 13 }}
+                            >
                               {run.task_name || `Runnable #${run.task_id}`}
                             </div>
                             <div className="cw-run-time">
@@ -804,20 +886,20 @@ export default () => {
                             </div>
                           </div>
                           <Tag
-                            style={{ fontSize: 10, padding: '0 4px' }}
+                            style={{ fontSize: 10, padding: "0 4px" }}
                             color={
                               run.status === "success"
                                 ? "success"
                                 : run.status === "running"
-                                  ? "processing"
-                                  : "error"
+                                ? "processing"
+                                : "error"
                             }
                           >
                             {run.status === "success"
                               ? "完成"
                               : run.status === "running"
-                                ? "运行"
-                                : "失败"}
+                              ? "运行"
+                              : "失败"}
                           </Tag>
                         </div>
                       ))}
@@ -837,7 +919,7 @@ export default () => {
                   <div className="cw-quick-links">
                     <div
                       className="cw-quick-link-item"
-                      style={{ padding: '14px 18px', borderRadius: '14px' }}
+                      style={{ padding: "14px 18px", borderRadius: "14px" }}
                       onClick={() => navigate("/agency")}
                     >
                       <MessageOutlined style={{ fontSize: 16 }} />
@@ -845,7 +927,7 @@ export default () => {
                     </div>
                     <div
                       className="cw-quick-link-item"
-                      style={{ padding: '14px 18px', borderRadius: '14px' }}
+                      style={{ padding: "14px 18px", borderRadius: "14px" }}
                       onClick={() => navigate("/mcp")}
                     >
                       <ApiOutlined style={{ fontSize: 16 }} />
@@ -853,7 +935,7 @@ export default () => {
                     </div>
                     <div
                       className="cw-quick-link-item"
-                      style={{ padding: '14px 18px', borderRadius: '14px' }}
+                      style={{ padding: "14px 18px", borderRadius: "14px" }}
                       onClick={() => navigate("/cron-jobs")}
                     >
                       <ScheduleOutlined style={{ fontSize: 16 }} />

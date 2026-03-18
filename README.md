@@ -114,7 +114,7 @@ npm run build:tauri
 也支持直接传下载链接：
 
 ```bash
-./scripts/install-macos-app.sh https://github.com/<owner>/<repo>/releases/download/<tag>/workhorse_2.0.1_aarch64.dmg
+./scripts/install-macos-app.sh https://github.com/TimothyZhang023/workhorse/releases/download/<tag>/workhorse_2.0.1_aarch64.dmg
 ```
 
 脚本默认安装到 `/Applications`，必要时会自动使用 `sudo`。如果你想安装到当前用户目录，也可以传第二个参数：

@@ -5,7 +5,7 @@ import {
   getChannelSessionBinding,
   setChannelSessionBinding,
 } from "../models/channelRuntime.js";
-import { runConversationMessage } from "./conversations.js";
+import { runConversationMessage } from "../models/agentConversation.js";
 
 const router = Router();
 
@@ -73,10 +73,20 @@ function createChannelConversation(uid, channel, participantKey, titleHint) {
   return String(conversation.id);
 }
 
-function getOrCreateChannelConversation(uid, channel, participantKey, titleHint) {
+function getOrCreateChannelConversation(
+  uid,
+  channel,
+  participantKey,
+  titleHint
+) {
   const binding = getChannelSessionBinding(uid, channel.id, participantKey);
   if (binding?.conversationId) {
-    setChannelSessionBinding(uid, channel.id, participantKey, binding.conversationId);
+    setChannelSessionBinding(
+      uid,
+      channel.id,
+      participantKey,
+      binding.conversationId
+    );
     return String(binding.conversationId);
   }
 
@@ -115,20 +125,25 @@ export async function sendTelegramTextMessage(botToken, chatId, text) {
     throw new Error("缺少 Telegram chat_id，无法回传消息。");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      chat_id: targetChatId,
-      text,
-    }),
-  });
+  const response = await fetch(
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: targetChatId,
+        text,
+      }),
+    }
+  );
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.description || `Telegram 消息回传失败 (${response.status})`);
+    throw new Error(
+      data?.description || `Telegram 消息回传失败 (${response.status})`
+    );
   }
 
   return data;
@@ -199,7 +214,12 @@ export async function handleIncomingChannelMessage({
     source: `${platform}_channel`,
   });
 
-  setChannelSessionBinding(uid, channel.id, participantKey, runResult.conversationId);
+  setChannelSessionBinding(
+    uid,
+    channel.id,
+    participantKey,
+    runResult.conversationId
+  );
 
   const outboundText = runResult.finalResponse || "Agent 未生成可返回内容。";
   const outboundLogPath = appendChannelEvent(uid, channel.id, {
@@ -312,7 +332,9 @@ router.post("/dingtalk/:channelId", async (req, res) => {
       )
     );
   } catch (error) {
-    return res.status(500).json(buildDingtalkText(`执行失败: ${error.message}`));
+    return res
+      .status(500)
+      .json(buildDingtalkText(`执行失败: ${error.message}`));
   }
 });
 
@@ -331,7 +353,9 @@ router.post("/telegram/:channelId", async (req, res) => {
       req.headers["x-telegram-bot-api-secret-token"] || ""
     ).trim();
     if (expectedSecret && expectedSecret !== providedSecret) {
-      return res.status(401).json({ ok: false, error: "telegram secret token 校验失败" });
+      return res
+        .status(401)
+        .json({ ok: false, error: "telegram secret token 校验失败" });
     }
     const normalizedPayload = normalizeTelegramInboundPayload(req.body);
 

@@ -20,6 +20,7 @@ describe("system overview route", () => {
       .expect(200);
 
     expect(res.body.runtime.node).toContain("v");
+    expect(res.body.meta.cached).toBe(false);
     expect(typeof res.body.counts.skills).toBe("number");
     expect(Array.isArray(res.body.recommendations)).toBe(true);
     expect(Array.isArray(res.body.health?.commands)).toBe(true);
@@ -28,7 +29,15 @@ describe("system overview route", () => {
         ["python", "python3", "Python"].includes(item.name)
       )
     ).toBe(true);
-  });
+
+    const cachedRes = await request(app)
+      .get("/api/system/overview")
+      .set("Authorization", `Bearer ${authToken}`)
+      .expect(200);
+
+    expect(cachedRes.body.meta.cached).toBe(true);
+    expect(typeof cachedRes.body.meta.updated_at).toBe("string");
+  }, 10000);
 
   it("clears stored history from the new system endpoint", async () => {
     const createRes = await request(app)

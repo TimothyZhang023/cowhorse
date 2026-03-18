@@ -105,13 +105,18 @@ export function startServer(port = 12621) {
       bootstrapChannelListeners();
       console.log("[Channels] Initialized channel listeners");
     } catch (e) {
-      console.error("[Channels] Failed to initialize channel listeners:", e.message);
+      console.error(
+        "[Channels] Failed to initialize channel listeners:",
+        e.message
+      );
     }
 
     try {
-      const { startUpdateChecker } = await import("./services/updateChecker.js");
+      const { startUpdateChecker } = await import(
+        "./services/updateChecker.js"
+      );
       startUpdateChecker();
-      console.log("[Update] Background update checker started");
+      console.log("[Update] Startup update check triggered");
     } catch (e) {
       console.error("[Update] Failed to start update checker:", e.message);
     }

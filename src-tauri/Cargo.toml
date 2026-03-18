@@ -4,7 +4,7 @@ version = "2.0.1"
 description = "Workhorse desktop shell with local Node sidecar"
 authors = ["CW Contributors"]
 license = ""
-repository = "https://github.com/TimothyZhang023/workhorse"
+repository = "https://github.com/TimothyZhang023/workhorse.git"
 edition = "2021"
 rust-version = "1.77.2"
 
